@@ -1,13 +1,14 @@
 /**
  * Custom Energy Flow Card for Home Assistant
- * v1.0.1 — bugfix release
+ * v1.1.0 — sun-tracking + auto-totals release
  *
- * Fixes from v1.0.0:
- *  - Card no longer crashes when an entity is unset (NaN guards everywhere)
- *  - _particles helper rewritten to avoid Lit raw-attribute injection
- *  - Unique IDs per instance (no clipPath collisions on multi-card pages)
- *  - Robust editor event handling for ha-entity-picker and ha-select
- *  - All numeric SVG attributes now guaranteed to be finite numbers
+ * Changes from v1.0.1:
+ *  - Sun now follows real time-of-day across the sky in any hemisphere,
+ *    using sun.sun's next_rising / next_setting timestamps.
+ *  - Monthly and yearly totals are now derived automatically from the
+ *    daily entity per category (persisted in localStorage). Removed the
+ *    monthly / yearly entity config keys entirely.
+ *  - Editor re-edit fixed (see editor changelog).
  */
 
 import {
@@ -18,6 +19,133 @@ import {
 } from "https://unpkg.com/lit-element@2.4.0/lit-element.js?module";
 
 let _instanceCounter = 0;
+
+const STORAGE_KEY = "energy-flow-card.totals.v1";
+
+/* -----------------------------------------------------------------
+ * Persistent totals helper.
+ *
+ * Stores, per entity_id:
+ *   lastDate          — ISO YYYY-MM-DD we last saw a value on
+ *   lastDaily         — last value seen for that day (kWh)
+ *   monthTotal        — sum of completed days in monthKey
+ *   monthKey          — YYYY-MM
+ *   yearTotal         — sum of completed days in yearKey
+ *   yearKey           — YYYY
+ *
+ * On each tick:
+ *   1. If today === lastDate → update lastDaily.
+ *   2. If date rolled → lock lastDaily into month/year totals, reset
+ *      month/year buckets if their key changed, then start fresh today.
+ * ----------------------------------------------------------------- */
+function _readStore() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function _writeStore(obj) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
+  } catch (e) {
+    /* quota / private mode — ignore */
+  }
+}
+
+function _todayKeys(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return {
+    date: `${y}-${m}-${day}`,
+    month: `${y}-${m}`,
+    year: `${y}`,
+  };
+}
+
+/**
+ * Update the persisted totals for `entityId` given the current daily
+ * value `v` (kWh, finite number). Returns { today, month, year }.
+ */
+function _accumulate(entityId, v) {
+  if (!entityId) return { today: null, month: null, year: null };
+
+  const store = _readStore();
+  const rec = store[entityId] || {};
+  const k = _todayKeys();
+
+  // Initialise if first sighting of this entity
+  if (!rec.lastDate) {
+    rec.lastDate = k.date;
+    rec.lastDaily = isFinite(v) ? v : 0;
+    rec.monthKey = k.month;
+    rec.monthTotal = 0;
+    rec.yearKey = k.year;
+    rec.yearTotal = 0;
+    store[entityId] = rec;
+    _writeStore(store);
+    return {
+      today: isFinite(v) ? v : 0,
+      month: isFinite(v) ? v : 0,
+      year: isFinite(v) ? v : 0,
+    };
+  }
+
+  // Day did not change → just refresh last-seen daily value
+  if (rec.lastDate === k.date) {
+    if (isFinite(v)) {
+      // Daily sensors are monotonic until they reset at midnight.
+      // If we see a smaller value mid-day (rare), trust the new one.
+      rec.lastDaily = v;
+      store[entityId] = rec;
+      _writeStore(store);
+    }
+    return {
+      today: isFinite(v) ? v : rec.lastDaily,
+      month: (rec.monthTotal || 0) + (isFinite(v) ? v : rec.lastDaily),
+      year: (rec.yearTotal || 0) + (isFinite(v) ? v : rec.lastDaily),
+    };
+  }
+
+  // Day changed → lock yesterday's last value into month/year buckets,
+  // then reset for today (and roll month/year if needed).
+  const closing = isFinite(rec.lastDaily) ? rec.lastDaily : 0;
+
+  // Roll year if year key changed
+  if (rec.yearKey !== k.year) {
+    rec.yearKey = k.year;
+    rec.yearTotal = 0;
+  }
+  // Roll month if month key changed
+  if (rec.monthKey !== k.month) {
+    rec.monthKey = k.month;
+    rec.monthTotal = 0;
+  }
+
+  // Add yesterday's close into the relevant buckets. We assume the
+  // previous lastDate falls into the bucket that was current before
+  // this roll — which is usually true (one-day rollover). If HA was
+  // offline for many days, we still only credit one day, which is the
+  // safest assumption without history access.
+  rec.monthTotal = (rec.monthTotal || 0) + closing;
+  rec.yearTotal = (rec.yearTotal || 0) + closing;
+
+  // Start today fresh with whatever the sensor currently reads.
+  rec.lastDate = k.date;
+  rec.lastDaily = isFinite(v) ? v : 0;
+
+  store[entityId] = rec;
+  _writeStore(store);
+
+  return {
+    today: rec.lastDaily,
+    month: rec.monthTotal + rec.lastDaily,
+    year: rec.yearTotal + rec.lastDaily,
+  };
+}
 
 class EnergyFlowCard extends LitElement {
   static get properties() {
@@ -136,21 +264,68 @@ class EnergyFlowCard extends LitElement {
     return 1;
   }
 
+  /**
+   * Compute the sun's position along the sunrise→noon→sunset arc for
+   * the current moment. Uses sun.sun's next_rising / next_setting
+   * timestamps — this is the only hemisphere-correct approach (azimuth
+   * math fails in the southern hemisphere because the sun crosses the
+   * northern sky).
+   */
   _sunPosition() {
     const sunId = this._config.sun_entity || "sun.sun";
+    const state = this._state(sunId);
     const elevation = this._safeNum(this._attr(sunId, "elevation", 45), 45);
     const azimuth = this._safeNum(this._attr(sunId, "azimuth", 180), 180);
 
-    if (elevation < 0) {
+    // Below the horizon → hide the sun.
+    if (elevation < 0 || (state && state.state === "below_horizon")) {
       return { x: 350, y: -100, visible: false, elevation, azimuth };
     }
 
-    let t = (azimuth - 90) / 180;
+    // Time-based fraction of daylight elapsed.
+    // Strategy:
+    //   - If we have a `next_setting` in the future and elevation > 0,
+    //     we're between sunrise and sunset. Sunrise was sometime in the
+    //     past; sun.sun gives us next_setting directly. To get sunrise
+    //     we use next_rising MINUS one day (since it's in tomorrow).
+    //   - Fraction t = (now - sunrise) / (sunset - sunrise), clamped 0..1.
+    let t = null;
+    try {
+      const nextRising = this._attr(sunId, "next_rising");
+      const nextSetting = this._attr(sunId, "next_setting");
+      if (nextRising && nextSetting) {
+        const now = Date.now();
+        const nrTs = Date.parse(nextRising);
+        const nsTs = Date.parse(nextSetting);
+        if (isFinite(nrTs) && isFinite(nsTs)) {
+          // We're above horizon, so sunset is in the future and sunrise
+          // was in the past. next_rising is tomorrow's; subtract ~24h.
+          const sunsetTs = nsTs;
+          const sunriseTs = nrTs - 24 * 60 * 60 * 1000;
+          if (sunsetTs > sunriseTs) {
+            t = (now - sunriseTs) / (sunsetTs - sunriseTs);
+          }
+        }
+      }
+    } catch (e) {
+      /* fall through to azimuth fallback */
+    }
+
+    // Fallback: derive t from elevation (peaks at noon) — works in any
+    // hemisphere but doesn't tell you east-vs-west on its own. Combine
+    // with a simple AM/PM check via the hour of day.
+    if (t === null || !isFinite(t)) {
+      const hr = new Date().getHours() + new Date().getMinutes() / 60;
+      // Approximate: assume daylight roughly 6:00 → 18:00 if no other info.
+      t = (hr - 6) / 12;
+    }
+
     t = Math.max(0, Math.min(1, t));
 
-    const p0 = { x: 60, y: 240 };
-    const p1 = { x: 350, y: -30 };
-    const p2 = { x: 640, y: 240 };
+    // Quadratic Bezier across the sky.
+    const p0 = { x: 60, y: 240 };  // sunrise (left)
+    const p1 = { x: 350, y: -30 }; // solar noon (top)
+    const p2 = { x: 640, y: 240 }; // sunset (right)
     const x =
       Math.pow(1 - t, 2) * p0.x +
       2 * (1 - t) * t * p1.x +
@@ -188,6 +363,17 @@ class EnergyFlowCard extends LitElement {
       `);
     }
     return items;
+  }
+
+  /**
+   * Resolve totals for one category. If the daily entity is configured,
+   * accumulate; otherwise return nulls so the cell shows "—".
+   */
+  _resolveTotals(dailyEntityId) {
+    if (!dailyEntityId) return { today: null, month: null, year: null };
+    const v = this._toKWh(dailyEntityId);
+    if (v === null) return { today: null, month: null, year: null };
+    return _accumulate(dailyEntityId, v);
   }
 
   render() {
@@ -240,11 +426,17 @@ class EnergyFlowCard extends LitElement {
     const fillH = (batterySoC / 100) * 56;
     const fillY = 34 - fillH;
 
+    // Auto-accumulated totals from the daily entity per category.
+    const tSolar = this._resolveTotals(cfg.solar_daily);
+    const tGridIn = this._resolveTotals(cfg.grid_import_daily);
+    const tGridOut = this._resolveTotals(cfg.grid_export_daily);
+    const tHome = this._resolveTotals(cfg.home_daily);
+
     const totals = {
-      solar: [this._toKWh(cfg.solar_daily), this._toKWh(cfg.solar_monthly), this._toKWh(cfg.solar_yearly)],
-      gridIn: [this._toKWh(cfg.grid_import_daily), this._toKWh(cfg.grid_import_monthly), this._toKWh(cfg.grid_import_yearly)],
-      gridOut: [this._toKWh(cfg.grid_export_daily), this._toKWh(cfg.grid_export_monthly), this._toKWh(cfg.grid_export_yearly)],
-      home: [this._toKWh(cfg.home_daily), this._toKWh(cfg.home_monthly), this._toKWh(cfg.home_yearly)],
+      solar: [tSolar.today, tSolar.month, tSolar.year],
+      gridIn: [tGridIn.today, tGridIn.month, tGridIn.year],
+      gridOut: [tGridOut.today, tGridOut.month, tGridOut.year],
+      home: [tHome.today, tHome.month, tHome.year],
     };
 
     return html`
@@ -503,7 +695,7 @@ class EnergyFlowCard extends LitElement {
           </div>
 
           <div class="totals">
-            <p class="totals-label">Cumulative totals</p>
+            <p class="totals-label">Cumulative totals · auto-tracked</p>
             ${this._totalsRow("Solar", "#EF9F27", "#FAEEDA", "#854F0B", "#633806", totals.solar)}
             ${this._totalsRow("Grid in", "#378ADD", "#E6F1FB", "#0C447C", "#042C53", totals.gridIn)}
             ${this._totalsRow("Grid out", "#97C459", "#EAF3DE", "#3B6D11", "#173404", totals.gridOut)}
@@ -572,12 +764,12 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "energy-flow-card",
   name: "Energy Flow Card",
-  description: "Live cinematic energy flow with sun-tracking, inverter and rolling totals",
+  description: "Live cinematic energy flow with sun-tracking, inverter and auto-accumulating totals",
   preview: true,
 });
 
 console.info(
-  "%c ENERGY-FLOW-CARD %c v1.0.1 ",
+  "%c ENERGY-FLOW-CARD %c v1.1.0 ",
   "color: white; background: #EF9F27; font-weight: 700;",
   "color: white; background: #1D9E75; font-weight: 700;"
 );

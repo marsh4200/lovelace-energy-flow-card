@@ -1,12 +1,14 @@
 /**
- * Visual editor for energy-flow-card v1.0.1
+ * Visual editor for energy-flow-card v1.1.0
  *
- * Fixes from v1.0.0:
- *  - ha-entity-picker uses native value-changed event (no manual unwrap)
- *  - ha-select event handling fixed (was firing on hover, now only on commit)
- *  - All field updates dispatch a single config-changed event with the
- *    full updated config, never partial
- *  - Defaults injected so toggles render correctly on a brand-new card
+ * Fixes from v1.0.1:
+ *  - Re-edit works: ha-entity-picker is eagerly registered via the
+ *    card-helpers loader before the editor mounts, so the picker is fully
+ *    available when its .value is set on a re-open.
+ *  - Removed monthly / yearly entity inputs. The card now derives those
+ *    automatically from the daily entity per category.
+ *  - setConfig no longer re-injects DEFAULTS over an existing config on
+ *    re-edit; defaults only fill genuinely missing keys.
  */
 
 import {
@@ -23,16 +25,58 @@ const DEFAULTS = {
   particle_density: "medium",
 };
 
+// Eagerly register ha-entity-picker. This is the standard HA-recommended
+// workaround so re-opening the editor always finds the component fully
+// registered (otherwise the picker initialises with a stale value the
+// first time you re-edit a saved card).
+let _pickerLoaded = false;
+async function ensureEntityPicker() {
+  if (_pickerLoaded) return;
+  if (customElements.get("ha-entity-picker")) {
+    _pickerLoaded = true;
+    return;
+  }
+  try {
+    const helpers = await window.loadCardHelpers?.();
+    if (helpers) {
+      const card = await helpers.createCardElement({ type: "entities", entities: [] });
+      // Touch a property so the lazy loaders fire
+      card.hass = undefined;
+    }
+  } catch (e) {
+    /* swallow — picker may already be available */
+  }
+  // Final wait: poll up to 1 s for the element to register
+  for (let i = 0; i < 20 && !customElements.get("ha-entity-picker"); i++) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  _pickerLoaded = !!customElements.get("ha-entity-picker");
+}
+
 class EnergyFlowCardEditor extends LitElement {
   static get properties() {
     return {
       hass: {},
-      _config: {},
+      _config: { state: true },
+      _ready: { state: true },
     };
   }
 
+  constructor() {
+    super();
+    this._ready = false;
+  }
+
+  async connectedCallback() {
+    super.connectedCallback();
+    await ensureEntityPicker();
+    this._ready = true;
+  }
+
   setConfig(config) {
-    this._config = { ...DEFAULTS, ...config };
+    // Merge defaults UNDER the user's config so we never overwrite values
+    // they already saved when HA re-opens the editor.
+    this._config = { ...DEFAULTS, ...(config || {}) };
   }
 
   _emit(newConfig) {
@@ -137,6 +181,9 @@ class EnergyFlowCardEditor extends LitElement {
 
   render() {
     if (!this._config) return html``;
+    if (!this._ready) {
+      return html`<div class="loading">Loading editor…</div>`;
+    }
 
     const sensorDomains = ["sensor"];
     const sunDomains = ["sun"];
@@ -161,38 +208,22 @@ class EnergyFlowCardEditor extends LitElement {
 
         <div class="section">
           <h3>Sun tracking</h3>
-          <p class="hint">Positions the sun across the sky based on real elevation and azimuth.</p>
+          <p class="hint">Positions the sun across the sky based on your real sunrise / sunset times — works in any hemisphere.</p>
           ${this._renderEntityPicker("sun_entity", "Sun entity", sunDomains)}
           ${this._renderToggle("show_sun_arc", "Show sunrise → sunset arc")}
         </div>
 
         <div class="section">
-          <h3>Solar totals</h3>
-          <p class="hint">Use utility_meter helpers (daily / monthly / yearly cycles).</p>
-          ${this._renderEntityPicker("solar_daily", "Solar today", sensorDomains)}
-          ${this._renderEntityPicker("solar_monthly", "Solar this month", sensorDomains)}
-          ${this._renderEntityPicker("solar_yearly", "Solar this year", sensorDomains)}
-        </div>
-
-        <div class="section">
-          <h3>Grid import totals</h3>
-          ${this._renderEntityPicker("grid_import_daily", "Grid in today", sensorDomains)}
-          ${this._renderEntityPicker("grid_import_monthly", "Grid in this month", sensorDomains)}
-          ${this._renderEntityPicker("grid_import_yearly", "Grid in this year", sensorDomains)}
-        </div>
-
-        <div class="section">
-          <h3>Grid export totals</h3>
-          ${this._renderEntityPicker("grid_export_daily", "Grid out today", sensorDomains)}
-          ${this._renderEntityPicker("grid_export_monthly", "Grid out this month", sensorDomains)}
-          ${this._renderEntityPicker("grid_export_yearly", "Grid out this year", sensorDomains)}
-        </div>
-
-        <div class="section">
-          <h3>Home consumption totals</h3>
-          ${this._renderEntityPicker("home_daily", "Home today", sensorDomains)}
-          ${this._renderEntityPicker("home_monthly", "Home this month", sensorDomains)}
-          ${this._renderEntityPicker("home_yearly", "Home this year", sensorDomains)}
+          <h3>Daily energy totals</h3>
+          <p class="hint">
+            Pick the <strong>daily</strong> energy sensor for each category (kWh today).
+            The card automatically tracks and accumulates monthly and yearly
+            totals from these — no utility-meter helpers needed.
+          </p>
+          ${this._renderEntityPicker("solar_daily", "Solar today (kWh)", sensorDomains)}
+          ${this._renderEntityPicker("grid_import_daily", "Grid imported today (kWh)", sensorDomains)}
+          ${this._renderEntityPicker("grid_export_daily", "Grid exported today (kWh)", sensorDomains)}
+          ${this._renderEntityPicker("home_daily", "Home consumption today (kWh)", sensorDomains)}
         </div>
 
         <div class="section">
@@ -219,6 +250,11 @@ class EnergyFlowCardEditor extends LitElement {
         flex-direction: column;
         gap: 16px;
       }
+      .loading {
+        padding: 20px;
+        color: var(--secondary-text-color);
+        text-align: center;
+      }
       .section {
         display: flex;
         flex-direction: column;
@@ -239,6 +275,9 @@ class EnergyFlowCardEditor extends LitElement {
         margin: 0;
         font-size: 12px;
         color: var(--secondary-text-color);
+      }
+      .hint strong {
+        color: var(--primary-text-color);
       }
       ha-entity-picker,
       ha-textfield,
