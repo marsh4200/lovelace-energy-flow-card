@@ -1,14 +1,8 @@
 /**
- * Visual editor for energy-flow-card v1.1.0
+ * Visual editor for energy-flow-card v1.2.0
  *
- * Fixes from v1.0.1:
- *  - Re-edit works: ha-entity-picker is eagerly registered via the
- *    card-helpers loader before the editor mounts, so the picker is fully
- *    available when its .value is set on a re-open.
- *  - Removed monthly / yearly entity inputs. The card now derives those
- *    automatically from the daily entity per category.
- *  - setConfig no longer re-injects DEFAULTS over an existing config on
- *    re-edit; defaults only fill genuinely missing keys.
+ * Same editor as v1.1.0 (re-edit + auto-totals fixes), with copy
+ * tweaks to match the simplified card scene.
  */
 
 import {
@@ -20,15 +14,11 @@ import {
 const DEFAULTS = {
   title: "Home grid",
   sun_entity: "sun.sun",
-  show_sun_arc: true,
+  show_sun_arc: false,
   animation_speed: "normal",
-  particle_density: "medium",
+  particle_density: "low",
 };
 
-// Eagerly register ha-entity-picker. This is the standard HA-recommended
-// workaround so re-opening the editor always finds the component fully
-// registered (otherwise the picker initialises with a stale value the
-// first time you re-edit a saved card).
 let _pickerLoaded = false;
 async function ensureEntityPicker() {
   if (_pickerLoaded) return;
@@ -40,13 +30,9 @@ async function ensureEntityPicker() {
     const helpers = await window.loadCardHelpers?.();
     if (helpers) {
       const card = await helpers.createCardElement({ type: "entities", entities: [] });
-      // Touch a property so the lazy loaders fire
       card.hass = undefined;
     }
-  } catch (e) {
-    /* swallow — picker may already be available */
-  }
-  // Final wait: poll up to 1 s for the element to register
+  } catch (e) { /* ignore */ }
   for (let i = 0; i < 20 && !customElements.get("ha-entity-picker"); i++) {
     await new Promise((r) => setTimeout(r, 50));
   }
@@ -74,8 +60,6 @@ class EnergyFlowCardEditor extends LitElement {
   }
 
   setConfig(config) {
-    // Merge defaults UNDER the user's config so we never overwrite values
-    // they already saved when HA re-opens the editor.
     this._config = { ...DEFAULTS, ...(config || {}) };
   }
 
@@ -166,8 +150,9 @@ class EnergyFlowCardEditor extends LitElement {
     `;
   }
 
-  _renderToggle(field, label) {
-    const value = this._config[field] !== false;
+  _renderToggle(field, label, defaultOn = true) {
+    const raw = this._config[field];
+    const value = raw === undefined ? defaultOn : !!raw;
     return html`
       <div class="toggle-row">
         <span class="toggle-label">${label}</span>
@@ -203,22 +188,21 @@ class EnergyFlowCardEditor extends LitElement {
           ${this._renderEntityPicker("battery_power", "Battery power (+ charge / − discharge)", sensorDomains)}
           ${this._renderEntityPicker("battery_soc", "Battery state-of-charge (%)", sensorDomains)}
           ${this._renderEntityPicker("home_power", "Home consumption", sensorDomains)}
-          ${this._renderEntityPicker("inverter_efficiency", "Inverter efficiency (optional)", sensorDomains)}
         </div>
 
         <div class="section">
           <h3>Sun tracking</h3>
-          <p class="hint">Positions the sun across the sky based on your real sunrise / sunset times — works in any hemisphere.</p>
+          <p class="hint">Sun position is computed from your real sunrise/sunset times — works in any hemisphere.</p>
           ${this._renderEntityPicker("sun_entity", "Sun entity", sunDomains)}
-          ${this._renderToggle("show_sun_arc", "Show sunrise → sunset arc")}
+          ${this._renderToggle("show_sun_arc", "Show faint sky arc", false)}
         </div>
 
         <div class="section">
           <h3>Daily energy totals</h3>
           <p class="hint">
-            Pick the <strong>daily</strong> energy sensor for each category (kWh today).
-            The card automatically tracks and accumulates monthly and yearly
-            totals from these — no utility-meter helpers needed.
+            Pick the <strong>daily</strong> sensor for each category (kWh today).
+            The card auto-tracks monthly and yearly totals from these — no
+            utility-meter helpers needed.
           </p>
           ${this._renderEntityPicker("solar_daily", "Solar today (kWh)", sensorDomains)}
           ${this._renderEntityPicker("grid_import_daily", "Grid imported today (kWh)", sensorDomains)}
@@ -262,9 +246,7 @@ class EnergyFlowCardEditor extends LitElement {
         padding-bottom: 14px;
         border-bottom: 1px solid var(--divider-color);
       }
-      .section:last-child {
-        border-bottom: none;
-      }
+      .section:last-child { border-bottom: none; }
       .section h3 {
         margin: 0;
         font-size: 14px;
@@ -276,12 +258,8 @@ class EnergyFlowCardEditor extends LitElement {
         font-size: 12px;
         color: var(--secondary-text-color);
       }
-      .hint strong {
-        color: var(--primary-text-color);
-      }
-      ha-entity-picker,
-      ha-textfield,
-      ha-select {
+      .hint strong { color: var(--primary-text-color); }
+      ha-entity-picker, ha-textfield, ha-select {
         display: block;
         width: 100%;
       }
