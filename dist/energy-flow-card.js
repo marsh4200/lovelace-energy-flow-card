@@ -48,6 +48,140 @@ function _cardBaseUrl() {
 const CARD_BASE_URL = _cardBaseUrl();
 
 /* ------------------------------------------------------------------ *
+ * Inverter presets.                                                   *
+ *                                                                     *
+ * Each preset is a partial config that's MERGED INTO the user's       *
+ * config before render -- with the user's explicit values winning.    *
+ * So picking a preset gives you sensible defaults for that inverter   *
+ * family, but you can still override anything by setting it yourself. *
+ *                                                                     *
+ * Add new presets here as a contributor PR -- the editor will pick    *
+ * them up automatically from INVERTER_PRESETS keys.                    *
+ * ------------------------------------------------------------------ */
+const INVERTER_PRESETS = {
+  // No preset: card uses its built-in defaults. Keeps the previous
+  // behaviour for users who haven't picked anything.
+  default: {
+    label: "Default (no preset)",
+    config: {},
+  },
+
+  // Deye / Sunsynk / Inverex share the same SG04LP1 hardware family
+  // and the same Modbus register sign conventions:
+  //   * battery_power: NEGATIVE when charging
+  //   * grid_power:    positive when importing (standard)
+  sunsynk: {
+    label: "Sunsynk (SG04LP1 family)",
+    config: {
+      inverter_label: "Sunsynk",
+      invert_battery_sign: true,
+      invert_grid_sign: false,
+    },
+  },
+  deye: {
+    label: "Deye (SG04LP1 family)",
+    config: {
+      inverter_label: "Deye",
+      invert_battery_sign: true,
+      invert_grid_sign: false,
+    },
+  },
+  inverex: {
+    label: "Inverex (Deye OEM)",
+    config: {
+      inverter_label: "Inverex",
+      invert_battery_sign: true,
+      invert_grid_sign: false,
+    },
+  },
+
+  // Solis hybrid units (RHI / S6-EH series) -- same convention as Deye.
+  solis_hybrid: {
+    label: "Solis Hybrid (RHI / S6-EH)",
+    config: {
+      inverter_label: "Solis",
+      invert_battery_sign: true,
+      invert_grid_sign: false,
+    },
+  },
+
+  // GoodWe ET / EH hybrid: battery_power positive when charging on the
+  // Modbus map most HA integrations expose, so no battery flip needed.
+  goodwe_hybrid: {
+    label: "GoodWe Hybrid (ET / EH)",
+    config: {
+      inverter_label: "GoodWe",
+      invert_battery_sign: false,
+      invert_grid_sign: false,
+    },
+  },
+
+  // Growatt SPA / SPH: battery_power is typically reported as two
+  // separate charge/discharge sensors. If the integration combines
+  // them into one signed sensor it's positive-for-charging.
+  growatt: {
+    label: "Growatt SPA / SPH",
+    config: {
+      inverter_label: "Growatt",
+      invert_battery_sign: false,
+      invert_grid_sign: false,
+    },
+  },
+
+  // Victron MultiPlus / Quattro via the venus.os integration. Victron
+  // reports battery power as POSITIVE when discharging (it's "load on
+  // the battery"), so flip.
+  victron: {
+    label: "Victron MultiPlus / Quattro",
+    config: {
+      inverter_label: "Victron",
+      invert_battery_sign: true,
+      invert_grid_sign: false,
+    },
+  },
+
+  // SolarEdge HD-Wave + StorEdge: battery_power positive when charging
+  // on the Modbus map exposed by the SolarEdge HA integration.
+  solaredge: {
+    label: "SolarEdge StorEdge",
+    config: {
+      inverter_label: "SolarEdge",
+      invert_battery_sign: false,
+      invert_grid_sign: false,
+    },
+  },
+
+  // Fronius GEN24 Plus + BYD HVS/HVM: battery_power positive when charging.
+  fronius_gen24: {
+    label: "Fronius GEN24 Plus",
+    config: {
+      inverter_label: "Fronius",
+      invert_battery_sign: false,
+      invert_grid_sign: false,
+    },
+  },
+};
+
+/** Apply the named preset's config under the user's config (user wins). */
+function _applyPreset(userConfig) {
+  if (!userConfig) return userConfig;
+  const presetKey = userConfig.inverter_preset || "default";
+  const preset = INVERTER_PRESETS[presetKey];
+  if (!preset || !preset.config) return userConfig;
+  // User config keys override preset defaults. Object spread does the
+  // right thing here: later keys win.
+  return { ...preset.config, ...userConfig };
+}
+
+// Make the preset list accessible to the editor without importing
+// the whole card module. The editor reads window._efcInverterPresets.
+try {
+  if (typeof window !== "undefined") {
+    window._efcInverterPresets = INVERTER_PRESETS;
+  }
+} catch (e) { /* ignore */ }
+
+/* ------------------------------------------------------------------ *
  * Persistent daily-rollup helper (unchanged from v1).                 *
  * Stores per entity_id: lastDate, lastDaily, monthKey, monthTotal,    *
  * yearKey, yearTotal. On day rollover, locks yesterday's final daily  *
@@ -167,15 +301,12 @@ class EnergyFlowCard extends LitElement {
     return {
       title: "Energy Flow",
       sun_entity: "sun.sun",
-      inverter_label: "Inverter",
       animation_speed: "normal",
       show_totals: true,
-      // Default to the Inverex / Deye / Sunsynk convention: their
-      // battery_power sensor reports NEGATIVE while charging. Setting
-      // this true means "charging" in the card matches "charging" in
-      // reality. Users on inverters that use the opposite convention
-      // can flip it off in the editor.
-      invert_battery_sign: true,
+      // Default to the Inverex preset since this card was built for
+      // an Inverex / Deye / Sunsynk hybrid setup. Users with a
+      // different inverter can pick their preset in the editor.
+      inverter_preset: "inverex",
     };
   }
 
@@ -183,15 +314,20 @@ class EnergyFlowCard extends LitElement {
     if (!config) {
       throw new Error("Invalid configuration");
     }
-    this._config = {
+    // Merge: hard-coded card defaults < inverter preset < user config.
+    // _applyPreset takes the user's `inverter_preset` key and folds
+    // the matching preset's values UNDER the user's other settings,
+    // so anything the user explicitly sets still wins.
+    const merged = _applyPreset({
       title: "Energy Flow",
       sun_entity: "sun.sun",
       inverter_label: "Inverter",
       animation_speed: "normal",
       show_totals: true,
-      invert_battery_sign: true,
+      inverter_preset: "default",
       ...config,
-    };
+    });
+    this._config = merged;
   }
 
   getCardSize() {

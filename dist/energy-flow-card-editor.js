@@ -113,6 +113,29 @@ class EnergyFlowCardEditor extends LitElement {
     ev.stopPropagation();
     const v = ev.target.value;
     if (v === undefined || v === "") return;
+
+    // Special-case: when the user changes the inverter preset, drop any
+    // existing explicit sign-convention overrides so the new preset's
+    // defaults take effect immediately. (Otherwise picking "Sunsynk"
+    // wouldn't change anything if the user had previously toggled
+    // invert_battery_sign manually.) Same for inverter_label if it
+    // was unset or matched the old preset.
+    if (field === "inverter_preset" && this._config[field] !== v) {
+      const newConfig = { ...this._config, inverter_preset: v };
+      delete newConfig.invert_battery_sign;
+      delete newConfig.invert_grid_sign;
+      // Also clear inverter_label if it was set by the old preset
+      // (best effort: only drop it if it's not user-customised text).
+      const presets = (typeof window !== "undefined" && window._efcInverterPresets) || {};
+      const oldPresetLabel =
+        presets[this._config.inverter_preset]?.config?.inverter_label;
+      if (oldPresetLabel && this._config.inverter_label === oldPresetLabel) {
+        delete newConfig.inverter_label;
+      }
+      this._emit(newConfig);
+      return;
+    }
+
     this._updateField(field, v);
   }
 
@@ -189,6 +212,29 @@ class EnergyFlowCardEditor extends LitElement {
     `;
   }
 
+  /** Toggle whose default tracks the active inverter preset. Shows a
+   *  small hint when the preset's value would differ from the toggle
+   *  state, so users can see whether the preset is supplying the
+   *  current behaviour or they've overridden it. */
+  _renderPresetAwareToggle(field, label, presetDefault) {
+    const raw = this._config[field];
+    const overridden = raw !== undefined;
+    const value = overridden ? !!raw : presetDefault;
+    const presetHint = `(preset: ${presetDefault ? "on" : "off"})`;
+    return html`
+      <div class="toggle-row">
+        <span class="toggle-label">
+          ${label}
+          <span class="preset-hint">${presetHint}</span>
+        </span>
+        <ha-switch
+          .checked=${value}
+          @change=${(ev) => this._toggleChanged(field, ev)}
+        ></ha-switch>
+      </div>
+    `;
+  }
+
   render() {
     if (!this._config) return html``;
     if (!this._ready) {
@@ -198,13 +244,40 @@ class EnergyFlowCardEditor extends LitElement {
     const sensorDomains = ["sensor"];
     const sunDomains = ["sun"];
 
+    // Pull the preset list registered by the card module. Fall back to
+    // a minimal hard-coded set if the card script hasn't loaded yet
+    // (this can happen when the editor opens before the card itself).
+    const presets = (typeof window !== "undefined" && window._efcInverterPresets) || {
+      default:  { label: "Default (no preset)" },
+      sunsynk:  { label: "Sunsynk" },
+      deye:     { label: "Deye" },
+      inverex:  { label: "Inverex" },
+    };
+    const presetOptions = Object.entries(presets).map(([value, p]) => ({
+      value,
+      label: p.label || value,
+    }));
+    const currentPreset = this._config.inverter_preset || "default";
+    const presetCfg = (presets[currentPreset] && presets[currentPreset].config) || {};
+
     return html`
       <div class="card-config">
 
         <div class="section">
+          <h3>Inverter preset</h3>
+          <p class="hint">
+            Pick your inverter family to auto-configure sign conventions
+            and label. Choose <strong>Default</strong> for no overrides.
+            Anything you set manually below still wins over the preset.
+          </p>
+          ${this._renderSelect("inverter_preset", "Inverter", presetOptions)}
+        </div>
+
+        <div class="section">
           <h3>Card</h3>
           ${this._renderTextInput("title", "Title", "Energy Flow")}
-          ${this._renderTextInput("inverter_label", "Inverter label", "Inverter")}
+          ${this._renderTextInput("inverter_label", "Inverter label",
+            presetCfg.inverter_label || "Inverter")}
         </div>
 
         <div class="section">
@@ -222,13 +295,21 @@ class EnergyFlowCardEditor extends LitElement {
         <div class="section">
           <h3>Sign conventions</h3>
           <p class="hint">
-            Flip these only if your dashed flow lines animate the wrong way.
-            Many inverters (e.g. some Deye / Sunsynk models) report battery
-            power as <strong>negative when charging</strong> — toggle the
-            battery option below if that's your setup.
+            The selected inverter preset already sets these for you. Only
+            change them if your dashed flow lines are still animating the
+            wrong way. Default values from the preset are shown when no
+            explicit override is set.
           </p>
-          ${this._renderToggle("invert_battery_sign", "Invert battery sign (negative = charging)", true)}
-          ${this._renderToggle("invert_grid_sign", "Invert grid sign (negative = importing)", false)}
+          ${this._renderPresetAwareToggle(
+            "invert_battery_sign",
+            "Invert battery sign (negative = charging)",
+            !!presetCfg.invert_battery_sign
+          )}
+          ${this._renderPresetAwareToggle(
+            "invert_grid_sign",
+            "Invert grid sign (negative = importing)",
+            !!presetCfg.invert_grid_sign
+          )}
         </div>
 
         <div class="section">
@@ -343,6 +424,14 @@ class EnergyFlowCardEditor extends LitElement {
       .toggle-label {
         font-size: 14px;
         color: var(--primary-text-color);
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .preset-hint {
+        font-size: 11px;
+        color: var(--secondary-text-color);
+        font-style: italic;
       }
     `;
   }
