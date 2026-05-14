@@ -21,6 +21,10 @@ const DEFAULTS = {
   show_totals: true,
   pv_peak_kw: 6,
   pwr_peak_kw: 8,
+  // Inverex / Deye / Sunsynk default: battery_power is negative while
+  // charging, so invert the sign by default. Users on inverters with
+  // the opposite convention can toggle this off.
+  invert_battery_sign: true,
 };
 
 let _pickerLoaded = false;
@@ -213,6 +217,18 @@ class EnergyFlowCardEditor extends LitElement {
           ${this._renderEntityPicker("battery_power", "Battery power (+ charge / − discharge)", sensorDomains)}
           ${this._renderEntityPicker("battery_soc", "Battery state-of-charge (%)", sensorDomains)}
           ${this._renderEntityPicker("home_power", "Home consumption", sensorDomains)}
+        </div>
+
+        <div class="section">
+          <h3>Sign conventions</h3>
+          <p class="hint">
+            Flip these only if your dashed flow lines animate the wrong way.
+            Many inverters (e.g. some Deye / Sunsynk models) report battery
+            power as <strong>negative when charging</strong> — toggle the
+            battery option below if that's your setup.
+          </p>
+          ${this._renderToggle("invert_battery_sign", "Invert battery sign (negative = charging)", true)}
+          ${this._renderToggle("invert_grid_sign", "Invert grid sign (negative = importing)", false)}
         </div>
 
         <div class="section">

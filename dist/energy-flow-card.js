@@ -170,6 +170,12 @@ class EnergyFlowCard extends LitElement {
       inverter_label: "Inverter",
       animation_speed: "normal",
       show_totals: true,
+      // Default to the Inverex / Deye / Sunsynk convention: their
+      // battery_power sensor reports NEGATIVE while charging. Setting
+      // this true means "charging" in the card matches "charging" in
+      // reality. Users on inverters that use the opposite convention
+      // can flip it off in the editor.
+      invert_battery_sign: true,
     };
   }
 
@@ -183,6 +189,7 @@ class EnergyFlowCard extends LitElement {
       inverter_label: "Inverter",
       animation_speed: "normal",
       show_totals: true,
+      invert_battery_sign: true,
       ...config,
     };
   }
@@ -352,21 +359,31 @@ class EnergyFlowCard extends LitElement {
    * Reusable: an "L-shaped" dashed flow connector between a node     *
    * and the central inverter tile. Returns the SVG group.            *
    *                                                                  *
-   * `from`  = { x, y }       (outer node connection point)           *
-   * `to`    = { x, y }       (inverter edge connection point)        *
-   * `color` = flow color (idle = green-ish, active = cyan/yellow)    *
-   * `active`= whether to animate dashes                              *
-   * `vertical` = orientation: true for top/bottom legs, false for L  *
+   * `from`     = { x, y }    (start point of the path)               *
+   * `to`       = { x, y }    (end point of the path)                 *
+   * `color`    = flow color                                          *
+   * `active`   = whether to animate dashes                           *
+   * `speed`    = animation speed multiplier                          *
+   * `label`    = optional power text                                 *
+   * `labelPos` = { x, y, anchor }                                    *
+   * `direction`= 'forward' (default) -> dashes from `from` to `to`   *
+   *              'reverse'           -> dashes from `to` to `from`   *
+   *                                                                  *
+   * Pick `from` to be the SOURCE and `to` to be the SINK; then       *
+   * leave `direction` at 'forward'. For bidirectional flows like     *
+   * battery/grid, pass 'reverse' when energy is flowing the          *
+   * other way.                                                       *
    * --------------------------------------------------------------- */
-  _renderFlowL(from, to, color, active, speed, label, labelPos) {
-    // L-shape: horizontal then vertical (or vice versa). We pick the
-    // bend so the line runs out of the outer node horizontally and
-    // into the inverter horizontally too -- i.e. one vertical kink in
-    // the middle. This matches the reference image.
+  _renderFlowL(from, to, color, active, speed, label, labelPos, direction = "forward") {
+    // L-shape with a vertical kink in the middle.
     const midX = (from.x + to.x) / 2;
     const d = `M ${from.x} ${from.y} L ${midX} ${from.y} L ${midX} ${to.y} L ${to.x} ${to.y}`;
+    // stroke-dashoffset: negative shifts dashes ALONG the path direction
+    // (from → to). Positive shifts AGAINST it (to → from). So we just
+    // flip the sign based on the requested direction.
+    const offsetTo = direction === "reverse" ? 32 : -32;
     const dashAnim = active
-      ? svg`<animate attributeName="stroke-dashoffset" from="0" to="-32" dur="${0.8 * speed}s" repeatCount="indefinite" />`
+      ? svg`<animate attributeName="stroke-dashoffset" from="0" to="${offsetTo}" dur="${0.8 * speed}s" repeatCount="indefinite" />`
       : "";
     return svg`
       <g class="flow-line ${active ? 'flow-active' : 'flow-idle'}">
@@ -412,8 +429,18 @@ class EnergyFlowCard extends LitElement {
     /* ---------- Read live values ---------- */
     const solarW = this._toW(cfg.solar_power);
     const solarKW = solarW / 1000;
-    const gridW = this._toW(cfg.grid_power);          // + import / - export
-    const batteryW = this._toW(cfg.battery_power);    // + charge / - discharge
+
+    // Some inverters report battery / grid power with the opposite sign
+    // convention. We assume by default:
+    //   - grid_power: positive = importing, negative = exporting
+    //   - battery_power: positive = charging, negative = discharging
+    // If a user's sensor uses the opposite, they can set
+    // `invert_grid_sign` and/or `invert_battery_sign` to true.
+    const gridSign = cfg.invert_grid_sign ? -1 : 1;
+    const batSign  = cfg.invert_battery_sign ? -1 : 1;
+
+    const gridW = this._toW(cfg.grid_power) * gridSign;          // + import / - export
+    const batteryW = this._toW(cfg.battery_power) * batSign;     // + charge / - discharge
     const batterySoC = Math.max(0, Math.min(100, Math.round(this._num(cfg.battery_soc, 0))));
     const homeW = this._toW(cfg.home_power);
     const homeKW = homeW / 1000;
@@ -766,16 +793,22 @@ class EnergyFlowCard extends LitElement {
                 );
               })()}
 
-              <!-- ===== FLOW: GRID <-> INVERTER (right, horizontal) ===== -->
+              <!-- ===== FLOW: GRID <-> INVERTER (right, horizontal) =====
+                   Path runs inverter -> grid. Default dash animation flows
+                   in that direction, which is correct for EXPORT.
+                   When importing, reverse the animation so dashes flow
+                   grid -> inverter. -->
               ${(() => {
                 const active = gridIn > 5 || gridOut > 5;
-                const color = gridOut > 5 ? "#3FD698" : (gridIn > 5 ? "#5DBFEB" : "#3FD698");
+                const importing = gridIn > 5;
+                const color = gridOut > 5 ? "#3FD698" : (importing ? "#5DBFEB" : "#3FD698");
                 return this._renderFlowL(
                   { x: invRight,     y: GRID.cy - 20 },
                   { x: GRID.cx - 70, y: GRID.cy - 20 },
                   color, active, speed,
                   active ? `${(Math.abs(gridW) / 1000).toFixed(2)} kWh` : "0.00 kWh",
-                  { x: (invRight + GRID.cx - 70) / 2, y: GRID.cy - 40, anchor: "middle" }
+                  { x: (invRight + GRID.cx - 70) / 2, y: GRID.cy - 40, anchor: "middle" },
+                  importing ? "reverse" : "forward"
                 );
               })()}
 
@@ -785,11 +818,21 @@ class EnergyFlowCard extends LitElement {
                 homeW > 5, speed
               )}
 
-              <!-- ===== FLOW: INVERTER -> BATTERY (stepped, bottom-left) =====
-                   Battery is now bottom-left of the house. Flow runs from
-                   inverter bottom-left corner: down, then left, then down
-                   into the top of the battery. Cyan when charging, amber
-                   when discharging. -->
+              <!-- ===== FLOW: INVERTER <-> BATTERY (stepped, bottom-left) =====
+                   Battery is bottom-left of the house. Path is drawn FROM
+                   the inverter bottom-left corner, down, across, and into
+                   the top of the battery. So the natural drawing direction
+                   is inverter -> battery.
+
+                   * When CHARGING (energy flows into battery), dashes
+                     should animate inverter -> battery, i.e. ALONG the
+                     path direction => negative stroke-dashoffset.
+                   * When DISCHARGING (energy flows out of battery into
+                     the inverter), dashes should animate battery ->
+                     inverter, i.e. AGAINST the drawn path => positive
+                     stroke-dashoffset.
+
+                   Colors: cyan while charging, amber while discharging. -->
               ${(() => {
                 const active = batCharging || batDischarging;
                 const color = batCharging ? "#5DBFEB"
@@ -804,6 +847,11 @@ class EnergyFlowCard extends LitElement {
                               L ${fromX} ${midY}
                               L ${toX} ${midY}
                               L ${toX} ${toY}`;
+                // Negative offset = dashes move in path-direction
+                // (inverter -> battery) = CHARGING.
+                // Positive offset = dashes move opposite to path
+                // (battery -> inverter) = DISCHARGING.
+                const offsetTo = batCharging ? -40 : 40;
                 return svg`
                   <path d="${path}"
                         fill="none" stroke="${color}"
@@ -813,7 +861,7 @@ class EnergyFlowCard extends LitElement {
                         opacity="${active ? 0.95 : 0.55}">
                     ${active ? svg`
                       <animate attributeName="stroke-dashoffset"
-                               from="0" to="${batCharging ? -40 : 40}"
+                               from="0" to="${offsetTo}"
                                dur="${0.8 * speed}s" repeatCount="indefinite" />
                     ` : ""}
                   </path>
