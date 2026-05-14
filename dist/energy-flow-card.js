@@ -59,8 +59,7 @@ const CARD_BASE_URL = _cardBaseUrl();
  * them up automatically from INVERTER_PRESETS keys.                    *
  * ------------------------------------------------------------------ */
 const INVERTER_PRESETS = {
-  // No preset: card uses its built-in defaults. Keeps the previous
-  // behaviour for users who haven't picked anything.
+  // No preset: card uses its built-in defaults (text-only tile).
   default: {
     label: "Default (no preset)",
     config: {},
@@ -70,10 +69,13 @@ const INVERTER_PRESETS = {
   // and the same Modbus register sign conventions:
   //   * battery_power: NEGATIVE when charging
   //   * grid_power:    positive when importing (standard)
+  // They're also the same physical unit (Deye is the OEM), so they
+  // share the inverter image.
   sunsynk: {
     label: "Sunsynk (SG04LP1 family)",
     config: {
       inverter_label: "Sunsynk",
+      inverter_image: "icons/inverter-deye.png",
       invert_battery_sign: true,
       invert_grid_sign: false,
     },
@@ -82,6 +84,7 @@ const INVERTER_PRESETS = {
     label: "Deye (SG04LP1 family)",
     config: {
       inverter_label: "Deye",
+      inverter_image: "icons/inverter-deye.png",
       invert_battery_sign: true,
       invert_grid_sign: false,
     },
@@ -90,6 +93,7 @@ const INVERTER_PRESETS = {
     label: "Inverex (Deye OEM)",
     config: {
       inverter_label: "Inverex",
+      inverter_image: "icons/inverter-deye.png",
       invert_battery_sign: true,
       invert_grid_sign: false,
     },
@@ -661,6 +665,24 @@ class EnergyFlowCard extends LitElement {
     const homeIconUrl  = `${CARD_BASE_URL}icons/home.png`;
     const solarIconUrl = `${CARD_BASE_URL}icons/solar.png`;
 
+    // Optional inverter image. Three accepted forms:
+    //   1. Relative path like "icons/inverter-deye.png" -> resolved
+    //      against the card's script URL (the usual case for built-in
+    //      images supplied by presets).
+    //   2. Absolute URL ("https://..." or "/local/...") -> used as-is.
+    //   3. unset/empty -> falls back to the orange text tile.
+    let inverterImageUrl = null;
+    if (cfg.inverter_image) {
+      const v = String(cfg.inverter_image).trim();
+      if (v) {
+        if (/^https?:\/\//i.test(v) || v.startsWith("/")) {
+          inverterImageUrl = v;
+        } else {
+          inverterImageUrl = `${CARD_BASE_URL}${v.replace(/^\.?\//, "")}`;
+        }
+      }
+    }
+
     return html`
       <ha-card>
         <div class="card-content">
@@ -888,33 +910,78 @@ class EnergyFlowCard extends LitElement {
                       text-anchor="middle">— idle —</text>
               `}
 
-              <!-- ===== INVERTER TILE (centered, larger) ===== -->
-              <g transform="translate(${INV.cx}, ${INV.cy})"
-                 filter="url(#${uid}-invGlow)">
+              <!-- ===== INVERTER TILE / IMAGE (centered) =====
+                   If `inverter_image` is configured, we render the photo
+                   instead of the orange text tile, preserving the same
+                   bounding box so the connected flow lines stay aligned.
+                   Telemetry chips (temperature, load%) sit just under
+                   the image. Otherwise we draw the original glowing
+                   text tile. -->
+              ${inverterImageUrl ? svg`
+                <!-- Subtle orange-tinted backplate so the image still
+                     reads as the "central" element of the diagram and
+                     blends with the dark card background. -->
                 <rect x="-${INV.w / 2}" y="-${INV.h / 2}"
+                      transform="translate(${INV.cx}, ${INV.cy})"
                       width="${INV.w}" height="${INV.h}" rx="16"
-                      fill="rgba(15,22,32,0.7)"
-                      stroke="#EF9F27" stroke-width="3.5" />
-              </g>
-              <!-- Inverter text content (not blurred) -->
-              <g transform="translate(${INV.cx}, ${INV.cy})">
-                <text x="0" y="-35" fill="#EF9F27" font-size="28"
-                      font-weight="700" text-anchor="middle">
+                      fill="rgba(15,22,32,0.5)"
+                      stroke="#EF9F27" stroke-width="2"
+                      stroke-opacity="0.7" />
+                <image href="${inverterImageUrl}"
+                       x="${INV.cx - INV.w / 2 + 18}"
+                       y="${INV.cy - INV.h / 2 + 8}"
+                       width="${INV.w - 36}"
+                       height="${INV.h - 50}"
+                       preserveAspectRatio="xMidYMid meet" />
+                <!-- Bottom strip with label + telemetry -->
+                <text x="${INV.cx}" y="${INV.cy + INV.h / 2 - 22}"
+                      fill="#EF9F27" font-size="15" font-weight="700"
+                      text-anchor="middle" letter-spacing="0.05em">
                   ${cfg.inverter_label || "Inverter"}
                 </text>
-                ${invTemp != null ? svg`
-                  <text x="0" y="0" fill="#EF9F27" font-size="22"
-                        font-weight="600" text-anchor="middle">
-                    ${invTemp.toFixed(1)} °C
+                ${(invTemp != null || invLoadPct != null) ? svg`
+                  <text x="${INV.cx}" y="${INV.cy + INV.h / 2 - 6}"
+                        font-size="13" font-weight="600"
+                        text-anchor="middle">
+                    ${invTemp != null ? svg`
+                      <tspan fill="#EF9F27">${invTemp.toFixed(1)}°C</tspan>
+                    ` : ""}
+                    ${(invTemp != null && invLoadPct != null) ? svg`
+                      <tspan fill="#6B7280"> · </tspan>
+                    ` : ""}
+                    ${invLoadPct != null ? svg`
+                      <tspan fill="#3FD698">${Math.round(invLoadPct)}%</tspan>
+                    ` : ""}
                   </text>
                 ` : ""}
-                ${invLoadPct != null ? svg`
-                  <text x="0" y="35" fill="#3FD698" font-size="22"
-                        font-weight="600" text-anchor="middle">
-                    ${Math.round(invLoadPct)}%
+              ` : svg`
+                <!-- Text-tile fallback (original look) -->
+                <g transform="translate(${INV.cx}, ${INV.cy})"
+                   filter="url(#${uid}-invGlow)">
+                  <rect x="-${INV.w / 2}" y="-${INV.h / 2}"
+                        width="${INV.w}" height="${INV.h}" rx="16"
+                        fill="rgba(15,22,32,0.7)"
+                        stroke="#EF9F27" stroke-width="3.5" />
+                </g>
+                <g transform="translate(${INV.cx}, ${INV.cy})">
+                  <text x="0" y="-35" fill="#EF9F27" font-size="28"
+                        font-weight="700" text-anchor="middle">
+                    ${cfg.inverter_label || "Inverter"}
                   </text>
-                ` : ""}
-              </g>
+                  ${invTemp != null ? svg`
+                    <text x="0" y="0" fill="#EF9F27" font-size="22"
+                          font-weight="600" text-anchor="middle">
+                      ${invTemp.toFixed(1)} °C
+                    </text>
+                  ` : ""}
+                  ${invLoadPct != null ? svg`
+                    <text x="0" y="35" fill="#3FD698" font-size="22"
+                          font-weight="600" text-anchor="middle">
+                      ${Math.round(invLoadPct)}%
+                    </text>
+                  ` : ""}
+                </g>
+              `}
 
               <!-- ===== FLOW: SOLAR PANELS -> INVERTER (left, orange when generating) ===== -->
               ${(() => {

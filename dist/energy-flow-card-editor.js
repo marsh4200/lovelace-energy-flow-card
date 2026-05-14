@@ -124,13 +124,18 @@ class EnergyFlowCardEditor extends LitElement {
       const newConfig = { ...this._config, inverter_preset: v };
       delete newConfig.invert_battery_sign;
       delete newConfig.invert_grid_sign;
-      // Also clear inverter_label if it was set by the old preset
-      // (best effort: only drop it if it's not user-customised text).
+      // Also clear inverter_label / inverter_image if they were set by
+      // the old preset (best effort: drop them only if they match the
+      // old preset's values exactly, i.e. weren't user-customised).
       const presets = (typeof window !== "undefined" && window._efcInverterPresets) || {};
-      const oldPresetLabel =
-        presets[this._config.inverter_preset]?.config?.inverter_label;
-      if (oldPresetLabel && this._config.inverter_label === oldPresetLabel) {
+      const oldPreset = presets[this._config.inverter_preset]?.config || {};
+      if (oldPreset.inverter_label &&
+          this._config.inverter_label === oldPreset.inverter_label) {
         delete newConfig.inverter_label;
+      }
+      if (oldPreset.inverter_image &&
+          this._config.inverter_image === oldPreset.inverter_image) {
+        delete newConfig.inverter_image;
       }
       this._emit(newConfig);
       return;
@@ -278,6 +283,18 @@ class EnergyFlowCardEditor extends LitElement {
           ${this._renderTextInput("title", "Title", "Energy Flow")}
           ${this._renderTextInput("inverter_label", "Inverter label",
             presetCfg.inverter_label || "Inverter")}
+          ${this._renderTextInput(
+            "inverter_image",
+            "Inverter image URL (optional)",
+            presetCfg.inverter_image || "(text tile)"
+          )}
+          <p class="hint">
+            Leave blank to use the preset's image. The selected inverter
+            preset auto-fills a built-in photo for SG04LP1 inverters
+            (Inverex / Deye / Sunsynk). For others, paste a URL — e.g.
+            <code>/local/my-inverter.png</code> — or leave blank for the
+            orange text tile.
+          </p>
         </div>
 
         <div class="section">
