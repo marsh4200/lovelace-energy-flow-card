@@ -445,10 +445,12 @@ class EnergyFlowCard extends LitElement {
      * The diagram lives in a 700 × 900 viewBox. Origin top-left.
      * Layout:
      *   - Sun arc occupies y ≈ 30–245 (wide arc with sunrise/sunset labels)
+     *   - SOLAR PANELS at (95, 460) — left middle, where the sun ray hits
      *   - Inverter tile centered at (355, 465), 220×170
-     *   - Battery node at (90, 460)
-     *   - Grid pylon node at (610, 460)
-     *   - House at (305, 745), EV at (635, 770)
+     *   - Grid pylon node at (610, 460) — right middle
+     *   - BATTERY at (140, 760) — bottom-left, next to the house
+     *   - House at (340, 745) — bottom center
+     *   - EV at (635, 770) — bottom right
      */
     const ARCH_TOP = 70;
     const ARCH_LEFT = 80;
@@ -461,8 +463,9 @@ class EnergyFlowCard extends LitElement {
     const invTop   = INV.cy - INV.h / 2;
     const invBot   = INV.cy + INV.h / 2;
 
-    const BAT  = { cx: 90,  cy: 460 };
-    const GRID = { cx: 610, cy: 460 };
+    const SOLAR = { cx: 95,  cy: 460 };  // panels go where battery used to be
+    const BAT   = { cx: 140, cy: 760 };  // battery moved down next to house
+    const GRID  = { cx: 610, cy: 460 };
 
     /* ---------- Totals (auto-accumulated) ---------- */
     const tSolar   = this._resolveTotals(cfg.solar_daily);
@@ -491,8 +494,9 @@ class EnergyFlowCard extends LitElement {
     const pwrFrac = Math.max(0, Math.min(1, homeKW / pwrPeak));
 
     // Icon URLs (loaded from sibling ./icons/ folder).
-    const gridIconUrl = `${CARD_BASE_URL}icons/grid.png`;
-    const homeIconUrl = `${CARD_BASE_URL}icons/home.png`;
+    const gridIconUrl  = `${CARD_BASE_URL}icons/grid.png`;
+    const homeIconUrl  = `${CARD_BASE_URL}icons/home.png`;
+    const solarIconUrl = `${CARD_BASE_URL}icons/solar.png`;
 
     return html`
       <ha-card>
@@ -542,8 +546,18 @@ class EnergyFlowCard extends LitElement {
                   <stop offset="0%" stop-color="#3FD698" stop-opacity="0.25" />
                   <stop offset="100%" stop-color="#3FD698" stop-opacity="0" />
                 </radialGradient>
+                <!-- Soft blue floor glow under the solar panels -->
+                <radialGradient id="${uid}-solarGlow" cx="50%" cy="60%" r="50%">
+                  <stop offset="0%" stop-color="#5DBFEB" stop-opacity="0.25" />
+                  <stop offset="100%" stop-color="#5DBFEB" stop-opacity="0" />
+                </radialGradient>
+                <!-- Sun ray gradient: bright at the sun, fades into the panel -->
+                <linearGradient id="${uid}-rayGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#FFE89A" stop-opacity="0.85" />
+                  <stop offset="100%" stop-color="#FFB347" stop-opacity="0.1" />
+                </linearGradient>
                 <clipPath id="${uid}-batClip">
-                  <rect x="-36" y="-72" width="72" height="140" rx="6" />
+                  <rect x="-31" y="-62" width="62" height="124" rx="5" />
                 </clipPath>
               </defs>
 
@@ -605,62 +619,89 @@ class EnergyFlowCard extends LitElement {
                   <text x="42" y="6" fill="#EF9F27" font-size="17"
                         text-anchor="middle">⚡</text>
                 </g>
-                <!-- Sun-to-inverter "lightning" wire -->
-                <path d="M ${sun.x} ${sun.y + 14}
-                         L ${sun.x - 7} ${sun.y + 70}
-                         L ${sun.x + 12} ${sun.y + 130}
-                         L ${sun.x - 7} ${sun.y + 190}
-                         L ${sun.x + 5} ${sun.y + 250}
-                         L ${INV.cx} ${invTop}"
-                      fill="none" stroke="#EF9F27"
-                      stroke-width="3" stroke-linecap="round"
-                      stroke-linejoin="round" opacity="0.95">
-                  <animate attributeName="stroke-dasharray"
-                           values="0 300;300 0" dur="${1.4 * speed}s"
-                           repeatCount="indefinite" />
-                </path>
+                <!-- Sun rays: 3 diagonal beams fanning down from the sun
+                     onto the solar panel surface. Each beam uses the rayGrad
+                     so they appear brightest at the sun and fade into the
+                     panel. When solar generation is active, dashes animate
+                     to suggest flowing photons; when inactive the rays dim. -->
+                <g class="sun-rays">
+                  <!-- Beam 1: left edge of panel -->
+                  <line x1="${sun.x - 2}" y1="${sun.y + 10}"
+                        x2="${SOLAR.cx - 45}" y2="${SOLAR.cy - 40}"
+                        stroke="url(#${uid}-rayGrad)" stroke-width="6"
+                        stroke-linecap="round"
+                        opacity="${solarKW > 0.05 ? 0.55 : 0.2}" />
+                  <!-- Beam 2: center of panel (brightest) -->
+                  <line x1="${sun.x + 2}" y1="${sun.y + 10}"
+                        x2="${SOLAR.cx}" y2="${SOLAR.cy - 65}"
+                        stroke="url(#${uid}-rayGrad)" stroke-width="6"
+                        stroke-linecap="round"
+                        opacity="${solarKW > 0.05 ? 0.75 : 0.25}" />
+                  <!-- Beam 3: right edge of panel -->
+                  <line x1="${sun.x + 5}" y1="${sun.y + 12}"
+                        x2="${SOLAR.cx + 55}" y2="${SOLAR.cy - 30}"
+                        stroke="url(#${uid}-rayGrad)" stroke-width="6"
+                        stroke-linecap="round"
+                        opacity="${solarKW > 0.05 ? 0.5 : 0.18}" />
+                  ${solarKW > 0.05 ? svg`
+                    <!-- Sparkle dots along the beams, scattered -->
+                    <circle cx="${sun.x - 80}" cy="${sun.y + 150}"
+                            r="2.5" fill="#FFE89A" opacity="0.9">
+                      <animate attributeName="opacity"
+                               values="0.3;1;0.3" dur="${1.6 * speed}s"
+                               repeatCount="indefinite" />
+                    </circle>
+                    <circle cx="${sun.x - 150}" cy="${sun.y + 220}"
+                            r="2" fill="#FFD562" opacity="0.85">
+                      <animate attributeName="opacity"
+                               values="1;0.3;1" dur="${1.6 * speed}s"
+                               repeatCount="indefinite" />
+                    </circle>
+                    <circle cx="${sun.x - 50}" cy="${sun.y + 90}"
+                            r="2" fill="#FFE89A" opacity="0.8">
+                      <animate attributeName="opacity"
+                               values="0.5;1;0.5" dur="${1.2 * speed}s"
+                               repeatCount="indefinite" />
+                    </circle>
+                  ` : ""}
+                </g>
               ` : svg`
                 <text x="350" y="${sun.archApexY + 50}" fill="#6B7280"
                       font-size="14" text-anchor="middle"
                       letter-spacing="0.1em">SUN BELOW HORIZON</text>
               `}
 
-              <!-- ===== BATTERY (left, larger) ===== -->
-              <g transform="translate(${BAT.cx}, ${BAT.cy})">
-                <!-- Outer body -->
-                <rect x="-42" y="-82" width="84" height="160" rx="10"
-                      fill="#0F1620" stroke="#2A3848" stroke-width="2" />
-                <!-- Top cap -->
-                <rect x="-20" y="-92" width="40" height="10" rx="3"
-                      fill="#2A3848" />
-                <!-- Inner glass -->
-                <rect x="-36" y="-72" width="72" height="140" rx="6"
-                      fill="#0A1018" />
-                <!-- Battery fill -->
-                <g clip-path="url(#${uid}-batClip)">
-                  <rect x="-36"
-                        y="${68 - (batterySoC / 100) * 140}"
-                        width="72"
-                        height="${(batterySoC / 100) * 140}"
-                        fill="url(#${uid}-batFill)" />
-                </g>
-                <!-- Lightning bolt overlay -->
-                <path d="M -6 -28 L -14 0 L -3 0 L -8 28 L 14 -6 L 3 -6 L 8 -28 Z"
-                      fill="#FFFFFF" opacity="0.95" />
-                <!-- SoC % -->
-                <text x="0" y="8" fill="#FFFFFF" font-size="28"
-                      font-weight="700" text-anchor="middle"
-                      style="paint-order:stroke;stroke:#0A1018;stroke-width:4px">
-                  ${batterySoC}%
-                </text>
-                <!-- Voltage below -->
-                ${battVoltage != null ? svg`
-                  <text x="0" y="100" fill="#FFFFFF" font-size="16"
-                        font-weight="600" text-anchor="middle">
-                    ${battVoltage.toFixed(1)} V
-                  </text>
-                ` : ""}
-              </g>
+              <!-- ===== SOLAR PANELS (left, where battery used to be) ===== -->
+              <ellipse cx="${SOLAR.cx}" cy="${SOLAR.cy + 60}"
+                       rx="80" ry="14"
+                       fill="url(#${uid}-solarGlow)" />
+              <image href="${solarIconUrl}"
+                     x="${SOLAR.cx - 80}" y="${SOLAR.cy - 60}"
+                     width="160" height="130"
+                     preserveAspectRatio="xMidYMid meet" />
+              <!-- Total solar power label below the panels -->
+              <text x="${SOLAR.cx}" y="${SOLAR.cy + 90}"
+                    fill="#EF9F27" font-size="20" font-weight="700"
+                    text-anchor="middle">
+                ${solarKW.toFixed(2)} kW
+              </text>
+              <!-- PV1 / PV2 split labels just under the total -->
+              ${pv1KW != null ? svg`
+                <text x="${SOLAR.cx - 35}" y="${SOLAR.cy + 112}"
+                      fill="#9CA3AF" font-size="11" font-weight="500"
+                      text-anchor="middle">PV1</text>
+                <text x="${SOLAR.cx - 35}" y="${SOLAR.cy + 128}"
+                      fill="#EF9F27" font-size="14" font-weight="700"
+                      text-anchor="middle">${pv1KW.toFixed(2)}</text>
+              ` : ""}
+              ${pv2KW != null ? svg`
+                <text x="${SOLAR.cx + 35}" y="${SOLAR.cy + 112}"
+                      fill="#9CA3AF" font-size="11" font-weight="500"
+                      text-anchor="middle">PV2</text>
+                <text x="${SOLAR.cx + 35}" y="${SOLAR.cy + 128}"
+                      fill="#EF9F27" font-size="14" font-weight="700"
+                      text-anchor="middle">${pv2KW.toFixed(2)}</text>
+              ` : ""}
 
               <!-- ===== GRID PYLON (right, larger) ===== -->
               <ellipse cx="${GRID.cx}" cy="${GRID.cy + 50}"
@@ -712,28 +753,20 @@ class EnergyFlowCard extends LitElement {
                 ` : ""}
               </g>
 
-              <!-- ===== FLOW: BATTERY <-> INVERTER ===== -->
+              <!-- ===== FLOW: SOLAR PANELS -> INVERTER (left, orange when generating) ===== -->
               ${(() => {
-                const active = batCharging || batDischarging;
-                const color = active ? "#5DBFEB" : "#3FD698";
+                const active = solarKW > 0.05;
+                const color = active ? "#EF9F27" : "#3FD698";
                 return this._renderFlowL(
-                  { x: BAT.cx + 42, y: BAT.cy - 20 },
-                  { x: invLeft,     y: BAT.cy - 20 },
+                  { x: SOLAR.cx + 80, y: SOLAR.cy - 20 },
+                  { x: invLeft,       y: SOLAR.cy - 20 },
                   color, active, speed,
-                  active ? this._formatPower(Math.abs(batteryW)) : null,
-                  { x: (BAT.cx + 42 + invLeft) / 2, y: BAT.cy - 40, anchor: "middle" }
+                  active ? `${solarKW.toFixed(2)} kW` : null,
+                  { x: (SOLAR.cx + 80 + invLeft) / 2, y: SOLAR.cy - 40, anchor: "middle" }
                 );
               })()}
-              <!-- Battery current readout -->
-              ${battCurrent != null ? svg`
-                <text x="${(BAT.cx + 42 + invLeft) / 2}" y="${BAT.cy}"
-                      fill="#FFFFFF" font-size="14" font-weight="500"
-                      text-anchor="middle" opacity="0.85">
-                  ${battCurrent.toFixed(1)} A
-                </text>
-              ` : ""}
 
-              <!-- ===== FLOW: GRID <-> INVERTER ===== -->
+              <!-- ===== FLOW: GRID <-> INVERTER (right, horizontal) ===== -->
               ${(() => {
                 const active = gridIn > 5 || gridOut > 5;
                 const color = gridOut > 5 ? "#3FD698" : (gridIn > 5 ? "#5DBFEB" : "#3FD698");
@@ -752,27 +785,100 @@ class EnergyFlowCard extends LitElement {
                 homeW > 5, speed
               )}
 
+              <!-- ===== FLOW: INVERTER -> BATTERY (stepped, bottom-left) =====
+                   Battery is now bottom-left of the house. Flow runs from
+                   inverter bottom-left corner: down, then left, then down
+                   into the top of the battery. Cyan when charging, amber
+                   when discharging. -->
+              ${(() => {
+                const active = batCharging || batDischarging;
+                const color = batCharging ? "#5DBFEB"
+                            : batDischarging ? "#EF9F27"
+                            : "#3FD698";
+                const fromX = invLeft + 30;
+                const fromY = invBot;
+                const midY  = fromY + 60;          // first elbow
+                const toX   = BAT.cx;
+                const toY   = BAT.cy - 75;         // top of battery
+                const path = `M ${fromX} ${fromY}
+                              L ${fromX} ${midY}
+                              L ${toX} ${midY}
+                              L ${toX} ${toY}`;
+                return svg`
+                  <path d="${path}"
+                        fill="none" stroke="${color}"
+                        stroke-width="3" stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-dasharray="10 10"
+                        opacity="${active ? 0.95 : 0.55}">
+                    ${active ? svg`
+                      <animate attributeName="stroke-dashoffset"
+                               from="0" to="${batCharging ? -40 : 40}"
+                               dur="${0.8 * speed}s" repeatCount="indefinite" />
+                    ` : ""}
+                  </path>
+                  ${active ? svg`
+                    <text x="${(fromX + toX) / 2}"
+                          y="${midY - 8}"
+                          fill="#FFFFFF" font-size="14" font-weight="600"
+                          text-anchor="middle">
+                      ${this._formatPower(Math.abs(batteryW))}
+                    </text>
+                  ` : ""}
+                `;
+              })()}
+
               <!-- ===== HOUSE ===== -->
-              <ellipse cx="305" cy="800" rx="120" ry="22"
+              <ellipse cx="370" cy="800" rx="110" ry="20"
                        fill="url(#${uid}-houseGlow)" />
               <image href="${homeIconUrl}"
-                     x="195" y="660"
+                     x="260" y="665"
                      width="220" height="170"
                      preserveAspectRatio="xMidYMid meet" />
 
-              <!-- PV1 / PV2 labels (left side) -->
-              ${pv1KW != null ? svg`
-                <text x="35" y="720" fill="#9CA3AF" font-size="16"
-                      font-weight="500">PV1</text>
-                <text x="35" y="748" fill="#EF9F27" font-size="22"
-                      font-weight="700">${pv1KW.toFixed(2)} kW</text>
-              ` : ""}
-              ${pv2KW != null ? svg`
-                <text x="35" y="778" fill="#9CA3AF" font-size="16"
-                      font-weight="500">PV2</text>
-                <text x="35" y="806" fill="#EF9F27" font-size="22"
-                      font-weight="700">${pv2KW.toFixed(2)} kW</text>
-              ` : ""}
+              <!-- ===== BATTERY (bottom-left, next to the house) ===== -->
+              <g transform="translate(${BAT.cx}, ${BAT.cy})">
+                <!-- Outer body -->
+                <rect x="-36" y="-70" width="72" height="140" rx="9"
+                      fill="#0F1620" stroke="#2A3848" stroke-width="2" />
+                <!-- Top cap -->
+                <rect x="-17" y="-78" width="34" height="8" rx="3"
+                      fill="#2A3848" />
+                <!-- Inner glass -->
+                <rect x="-31" y="-62" width="62" height="124" rx="5"
+                      fill="#0A1018" />
+                <!-- Battery fill (96% of 124px ≈ 119px) -->
+                <g clip-path="url(#${uid}-batClip)">
+                  <rect x="-31"
+                        y="${62 - (batterySoC / 100) * 124}"
+                        width="62"
+                        height="${(batterySoC / 100) * 124}"
+                        fill="url(#${uid}-batFill)" />
+                </g>
+                <!-- Lightning bolt overlay -->
+                <path d="M -5 -24 L -12 0 L -2 0 L -7 24 L 12 -5 L 2 -5 L 7 -24 Z"
+                      fill="#FFFFFF" opacity="0.95" />
+                <!-- SoC % -->
+                <text x="0" y="8" fill="#FFFFFF" font-size="24"
+                      font-weight="700" text-anchor="middle"
+                      style="paint-order:stroke;stroke:#0A1018;stroke-width:4px">
+                  ${batterySoC}%
+                </text>
+                <!-- Voltage below -->
+                ${battVoltage != null ? svg`
+                  <text x="0" y="88" fill="#FFFFFF" font-size="14"
+                        font-weight="600" text-anchor="middle">
+                    ${battVoltage.toFixed(1)} V
+                  </text>
+                ` : ""}
+                <!-- Current readout (replaces the old middle-of-flow label) -->
+                ${battCurrent != null ? svg`
+                  <text x="0" y="105" fill="#9CA3AF" font-size="12"
+                        font-weight="500" text-anchor="middle">
+                    ${battCurrent.toFixed(1)} A
+                  </text>
+                ` : ""}
+              </g>
 
               <!-- ===== EV / CAR (optional, right side) ===== -->
               ${evKW != null ? svg`
