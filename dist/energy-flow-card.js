@@ -1,6 +1,6 @@
 /**
  * Custom Energy Flow Card for Home Assistant
- * v2.0.0 — "Inverex" dark dashboard layout
+ * v2.0.3 — "Inverex" dark dashboard layout
  *
  * Redesigned around a central inverter tile with a battery on the
  * left, a grid pylon on the right, and the house (plus optional EV)
@@ -595,7 +595,16 @@ class EnergyFlowCard extends LitElement {
 
     // Optional inverter telemetry.
     const invTemp = this._hasEntity(cfg.inverter_temp) ? this._num(cfg.inverter_temp) : null;
-    const invLoadPct = this._hasEntity(cfg.inverter_load_pct) ? this._num(cfg.inverter_load_pct) : null;
+    // Two ways to express inverter load:
+    //   inverter_load_power  -> W or kW (preferred; shown as primary readout)
+    //   inverter_load_pct    -> 0..100 (legacy; shown only when no power
+    //                                   sensor is configured)
+    // If both are configured the W/kW wins and the % is dropped, because
+    // users asked for the W/kW reading rather than the percentage.
+    const invLoadW = this._hasEntity(cfg.inverter_load_power)
+      ? this._toW(cfg.inverter_load_power) : null;
+    const invLoadPct = this._hasEntity(cfg.inverter_load_pct)
+      ? this._num(cfg.inverter_load_pct) : null;
 
     // Optional EV / car charger.
     const evW = this._hasEntity(cfg.ev_power) ? this._toW(cfg.ev_power) : null;
@@ -939,21 +948,29 @@ class EnergyFlowCard extends LitElement {
                       text-anchor="middle" letter-spacing="0.05em">
                   ${cfg.inverter_label || "Inverter"}
                 </text>
-                ${(invTemp != null || invLoadPct != null) ? svg`
-                  <text x="${INV.cx}" y="${INV.cy + INV.h / 2 - 6}"
-                        font-size="13" font-weight="600"
-                        text-anchor="middle">
-                    ${invTemp != null ? svg`
-                      <tspan fill="#EF9F27">${invTemp.toFixed(1)}°C</tspan>
-                    ` : ""}
-                    ${(invTemp != null && invLoadPct != null) ? svg`
-                      <tspan fill="#6B7280"> · </tspan>
-                    ` : ""}
-                    ${invLoadPct != null ? svg`
-                      <tspan fill="#3FD698">${Math.round(invLoadPct)}%</tspan>
-                    ` : ""}
-                  </text>
-                ` : ""}
+                <!-- Bottom strip with label + telemetry. Power wins
+                     over percent when both are configured (users
+                     asked to see actual W/kW load). -->
+                ${(() => {
+                  const items = [];
+                  if (invTemp != null)
+                    items.push({ color: "#EF9F27", text: `${invTemp.toFixed(1)}°C` });
+                  if (invLoadW != null)
+                    items.push({ color: "#3FD698", text: this._formatPower(invLoadW) });
+                  else if (invLoadPct != null)
+                    items.push({ color: "#3FD698", text: `${Math.round(invLoadPct)}%` });
+                  if (items.length === 0) return "";
+                  return svg`
+                    <text x="${INV.cx}" y="${INV.cy + INV.h / 2 - 6}"
+                          font-size="13" font-weight="600"
+                          text-anchor="middle">
+                      ${items.map((it, i) => svg`
+                        ${i > 0 ? svg`<tspan fill="#6B7280"> · </tspan>` : ""}
+                        <tspan fill="${it.color}">${it.text}</tspan>
+                      `)}
+                    </text>
+                  `;
+                })()}
               ` : svg`
                 <!-- Text-tile fallback (original look) -->
                 <g transform="translate(${INV.cx}, ${INV.cy})"
@@ -974,12 +991,17 @@ class EnergyFlowCard extends LitElement {
                       ${invTemp.toFixed(1)} °C
                     </text>
                   ` : ""}
-                  ${invLoadPct != null ? svg`
+                  ${invLoadW != null ? svg`
+                    <text x="0" y="35" fill="#3FD698" font-size="22"
+                          font-weight="600" text-anchor="middle">
+                      ${this._formatPower(invLoadW)}
+                    </text>
+                  ` : (invLoadPct != null ? svg`
                     <text x="0" y="35" fill="#3FD698" font-size="22"
                           font-weight="600" text-anchor="middle">
                       ${Math.round(invLoadPct)}%
                     </text>
-                  ` : ""}
+                  ` : "")}
                 </g>
               `}
 
@@ -1086,6 +1108,21 @@ class EnergyFlowCard extends LitElement {
                      x="260" y="665"
                      width="220" height="170"
                      preserveAspectRatio="xMidYMid meet" />
+              <!-- Live house consumption readout. Sits on the floor
+                   glow, color-matched to other house-side accents.
+                   Hidden if home_power isn't configured or reads zero
+                   (the threshold > 5W matches the rest of the card). -->
+              ${Math.abs(homeW) > 5 ? svg`
+                <text x="370" y="847" fill="#EF9F27"
+                      font-size="20" font-weight="700"
+                      text-anchor="middle">
+                  ${this._formatPower(homeW)}
+                </text>
+              ` : svg`
+                <text x="370" y="847" fill="#6B7280"
+                      font-size="16" font-weight="600"
+                      text-anchor="middle">— idle —</text>
+              `}
 
               <!-- ===== BATTERY (bottom-left, next to the house) ===== -->
               <g transform="translate(${BAT.cx}, ${BAT.cy})">
@@ -1619,7 +1656,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c ENERGY-FLOW-CARD %c v2.0.0 ",
+  "%c ENERGY-FLOW-CARD %c v2.0.3 ",
   "color: white; background: #EF9F27; font-weight: 700;",
   "color: white; background: #1FA8E0; font-weight: 700;"
 );

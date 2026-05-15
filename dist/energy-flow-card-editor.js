@@ -1,5 +1,5 @@
 /**
- * Visual editor for energy-flow-card v2.0.0
+ * Visual editor for energy-flow-card v2.0.3
  *
  * Covers the v1 config keys (still supported) plus the new optional
  * keys exposed by v2's expanded layout: PV1/PV2 split, battery
@@ -345,7 +345,12 @@ class EnergyFlowCardEditor extends LitElement {
         <div class="section">
           <h3>Inverter telemetry (optional)</h3>
           ${this._renderEntityPicker("inverter_temp", "Inverter temp (°C)", sensorDomains)}
-          ${this._renderEntityPicker("inverter_load_pct", "Inverter load (%)", sensorDomains)}
+          ${this._renderEntityPicker("inverter_load_power", "Inverter load (W or kW)", sensorDomains)}
+          ${this._renderEntityPicker("inverter_load_pct", "Inverter load (%) — fallback only", sensorDomains)}
+          <p class="hint">
+            If you set both, the card prefers the W/kW reading. The
+            percent sensor is only used when no W/kW sensor is wired up.
+          </p>
         </div>
 
         <div class="section">
