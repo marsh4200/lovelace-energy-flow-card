@@ -911,7 +911,7 @@ class EnergyFlowCard extends LitElement {
               `}
 
               <!-- ===== INVERTER TILE / IMAGE (centered) =====
-                   If `inverter_image` is configured, we render the photo
+                   If 'inverter_image' is configured, we render the photo
                    instead of the orange text tile, preserving the same
                    bounding box so the connected flow lines stay aligned.
                    Telemetry chips (temperature, load%) sit just under
