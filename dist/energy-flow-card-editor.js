@@ -217,12 +217,32 @@ class EnergyFlowCardEditor extends LitElement {
 
   _renderSelect(field, label, options) {
     const value = this._config[field] || options[0].value;
+    // ha-select wraps mwc-select. The `selected` event fires on
+    // highlight change (including keyboard hover) and `ev.target.value`
+    // isn't reliable at fire time. The correct hook is either:
+    //   * `closed`        — fired after the user picks an item AND the
+    //                       menu closes; ev.target.value is correct.
+    //   * `selected` with ev.detail.index — index into the option list.
+    //
+    // We use `closed` because it's the canonical "user committed a
+    // choice" event in Material Web Components, then read the live
+    // .value off the element itself.
     return html`
       <ha-select
         .label=${label}
         .value=${value}
-        @selected=${(ev) => this._selectChanged(field, ev)}
-        @closed=${(ev) => ev.stopPropagation()}
+        @closed=${(ev) => {
+          ev.stopPropagation();
+          // After menu closes, ev.target.value holds the chosen value.
+          const v = ev.target && ev.target.value;
+          if (v != null && v !== "") {
+            if (field === "inverter_preset") {
+              this._setPreset(v);
+            } else {
+              this._updateField(field, v);
+            }
+          }
+        }}
         fixedMenuPosition
         naturalMenuWidth
       >
