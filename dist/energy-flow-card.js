@@ -47,6 +47,15 @@ function _cardBaseUrl() {
 
 const CARD_BASE_URL = _cardBaseUrl();
 
+// Expose to the editor so it can resolve preset thumbnail icons using
+// the same base path as the card itself, no matter how the user
+// installed it.
+try {
+  if (typeof window !== "undefined") {
+    window._efcCardBaseUrl = CARD_BASE_URL;
+  }
+} catch (e) { /* ignore */ }
+
 /* ------------------------------------------------------------------ *
  * Inverter presets.                                                   *
  *                                                                     *
@@ -62,6 +71,7 @@ const INVERTER_PRESETS = {
   // No preset: card uses its built-in defaults (text-only tile).
   default: {
     label: "Default (no preset)",
+    icon: null,            // editor renders a generic placeholder
     config: {},
   },
 
@@ -73,15 +83,17 @@ const INVERTER_PRESETS = {
   // share the inverter image.
   sunsynk: {
     label: "Sunsynk (SG04LP1 family)",
+    icon: "icons/inverter-sunsynk.png",
     config: {
       inverter_label: "Sunsynk",
-      inverter_image: "icons/inverter-deye.png",
+      inverter_image: "icons/inverter-sunsynk.png",
       invert_battery_sign: true,
       invert_grid_sign: false,
     },
   },
   deye: {
     label: "Deye (SG04LP1 family)",
+    icon: "icons/inverter-deye-brand.png",
     config: {
       inverter_label: "Deye",
       inverter_image: "icons/inverter-deye.png",
@@ -91,6 +103,7 @@ const INVERTER_PRESETS = {
   },
   inverex: {
     label: "Inverex (Deye OEM)",
+    icon: "icons/inverter-deye-brand.png",
     config: {
       inverter_label: "Inverex",
       inverter_image: "icons/inverter-deye.png",
@@ -102,6 +115,7 @@ const INVERTER_PRESETS = {
   // Solis hybrid units (RHI / S6-EH series) -- same convention as Deye.
   solis_hybrid: {
     label: "Solis Hybrid (RHI / S6-EH)",
+    icon: null,  // no brand image bundled — falls back to label tile
     config: {
       inverter_label: "Solis",
       invert_battery_sign: true,
@@ -113,8 +127,10 @@ const INVERTER_PRESETS = {
   // Modbus map most HA integrations expose, so no battery flip needed.
   goodwe_hybrid: {
     label: "GoodWe Hybrid (ET / EH)",
+    icon: "icons/inverter-goodwe.png",
     config: {
       inverter_label: "GoodWe",
+      inverter_image: "icons/inverter-goodwe.png",
       invert_battery_sign: false,
       invert_grid_sign: false,
     },
@@ -125,8 +141,10 @@ const INVERTER_PRESETS = {
   // them into one signed sensor it's positive-for-charging.
   growatt: {
     label: "Growatt SPA / SPH",
+    icon: "icons/inverter-growatt.png",
     config: {
       inverter_label: "Growatt",
+      inverter_image: "icons/inverter-growatt.png",
       invert_battery_sign: false,
       invert_grid_sign: false,
     },
@@ -137,8 +155,10 @@ const INVERTER_PRESETS = {
   // the battery"), so flip.
   victron: {
     label: "Victron MultiPlus / Quattro",
+    icon: "icons/inverter-victron.png",
     config: {
       inverter_label: "Victron",
+      inverter_image: "icons/inverter-victron.png",
       invert_battery_sign: true,
       invert_grid_sign: false,
     },
@@ -148,6 +168,7 @@ const INVERTER_PRESETS = {
   // on the Modbus map exposed by the SolarEdge HA integration.
   solaredge: {
     label: "SolarEdge StorEdge",
+    icon: null,
     config: {
       inverter_label: "SolarEdge",
       invert_battery_sign: false,
@@ -158,6 +179,7 @@ const INVERTER_PRESETS = {
   // Fronius GEN24 Plus + BYD HVS/HVM: battery_power positive when charging.
   fronius_gen24: {
     label: "Fronius GEN24 Plus",
+    icon: null,
     config: {
       inverter_label: "Fronius",
       invert_battery_sign: false,

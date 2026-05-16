@@ -120,28 +120,35 @@ class EnergyFlowCardEditor extends LitElement {
     // wouldn't change anything if the user had previously toggled
     // invert_battery_sign manually.) Same for inverter_label if it
     // was unset or matched the old preset.
-    if (field === "inverter_preset" && this._config[field] !== v) {
-      const newConfig = { ...this._config, inverter_preset: v };
-      delete newConfig.invert_battery_sign;
-      delete newConfig.invert_grid_sign;
-      // Also clear inverter_label / inverter_image if they were set by
-      // the old preset (best effort: drop them only if they match the
-      // old preset's values exactly, i.e. weren't user-customised).
-      const presets = (typeof window !== "undefined" && window._efcInverterPresets) || {};
-      const oldPreset = presets[this._config.inverter_preset]?.config || {};
-      if (oldPreset.inverter_label &&
-          this._config.inverter_label === oldPreset.inverter_label) {
-        delete newConfig.inverter_label;
-      }
-      if (oldPreset.inverter_image &&
-          this._config.inverter_image === oldPreset.inverter_image) {
-        delete newConfig.inverter_image;
-      }
-      this._emit(newConfig);
+    if (field === "inverter_preset") {
+      this._setPreset(v);
       return;
     }
 
     this._updateField(field, v);
+  }
+
+  /** Apply a new inverter_preset by key. Clears sign-convention
+   *  overrides so the new preset's defaults kick in, and drops the
+   *  label/image if they still match the *previous* preset (i.e. the
+   *  user never customised them). Used by both the visual tile picker
+   *  and the legacy select fallback. */
+  _setPreset(key) {
+    if (!key || this._config.inverter_preset === key) return;
+    const newConfig = { ...this._config, inverter_preset: key };
+    delete newConfig.invert_battery_sign;
+    delete newConfig.invert_grid_sign;
+    const presets = (typeof window !== "undefined" && window._efcInverterPresets) || {};
+    const oldPreset = presets[this._config.inverter_preset]?.config || {};
+    if (oldPreset.inverter_label &&
+        this._config.inverter_label === oldPreset.inverter_label) {
+      delete newConfig.inverter_label;
+    }
+    if (oldPreset.inverter_image &&
+        this._config.inverter_image === oldPreset.inverter_image) {
+      delete newConfig.inverter_image;
+    }
+    this._emit(newConfig);
   }
 
   _toggleChanged(field, ev) {
@@ -258,12 +265,36 @@ class EnergyFlowCardEditor extends LitElement {
       deye:     { label: "Deye" },
       inverex:  { label: "Inverex" },
     };
-    const presetOptions = Object.entries(presets).map(([value, p]) => ({
-      value,
-      label: p.label || value,
-    }));
+
+    // Resolve sibling /icons/ folder the same way the card itself does,
+    // so thumbnails work no matter where HACS dropped the files.
+    const cardBase =
+      (typeof window !== "undefined" && window._efcCardBaseUrl) ||
+      "/hacsfiles/lovelace-energy-flow-card/";
+
+    // Curate display order: Default first, then the most common families
+    // we ship brand artwork for, then any extras.
+    const ORDER = [
+      "default",
+      "sunsynk", "deye", "inverex",
+      "goodwe_hybrid", "growatt", "victron",
+      "solis_hybrid", "solaredge", "fronius_gen24",
+    ];
+    const presetKeys = Object.keys(presets);
+    const orderedKeys = [
+      ...ORDER.filter((k) => presetKeys.includes(k)),
+      ...presetKeys.filter((k) => !ORDER.includes(k)),
+    ];
+
     const currentPreset = this._config.inverter_preset || "default";
     const presetCfg = (presets[currentPreset] && presets[currentPreset].config) || {};
+
+    const resolveIcon = (rel) => {
+      if (!rel) return null;
+      // Allow absolute URLs (https://, /local/...) to pass through.
+      if (/^(https?:)?\/\//.test(rel) || rel.startsWith("/")) return rel;
+      return cardBase + rel;
+    };
 
     return html`
       <div class="card-config">
@@ -275,7 +306,43 @@ class EnergyFlowCardEditor extends LitElement {
             and label. Choose <strong>Default</strong> for no overrides.
             Anything you set manually below still wins over the preset.
           </p>
-          ${this._renderSelect("inverter_preset", "Inverter", presetOptions)}
+          <div class="brand-grid" role="radiogroup" aria-label="Inverter preset">
+            ${orderedKeys.map((key) => {
+              const p = presets[key] || {};
+              const iconUrl = resolveIcon(p.icon);
+              const isSelected = key === currentPreset;
+              const isDefault = key === "default";
+              const shortLabel = (p.config && p.config.inverter_label) ||
+                (isDefault ? "None" : (p.label || key).split(" ")[0]);
+              const fullLabel = p.label || key;
+              return html`
+                <button
+                  type="button"
+                  class="brand-tile ${isSelected ? "selected" : ""} ${isDefault ? "is-default" : ""}"
+                  role="radio"
+                  aria-checked=${isSelected}
+                  title=${fullLabel}
+                  @click=${() => this._setPreset(key)}
+                >
+                  <div class="brand-thumb">
+                    ${iconUrl
+                      ? html`<img src=${iconUrl} alt=${fullLabel} loading="lazy" />`
+                      : html`<div class="brand-placeholder">
+                          <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+                            <path fill="currentColor" d="M12 2 1 9l4 1.5V17l7 4 7-4v-6.5l2-.7V17h2V9zM12 4.3 18.5 9 12 13.7 5.5 9zM7 11.5l5 3.2 5-3.2V15l-5 2.9L7 15z"/>
+                          </svg>
+                        </div>`}
+                    ${isSelected ? html`<span class="check-badge" aria-hidden="true">✓</span>` : null}
+                  </div>
+                  <div class="brand-label">${shortLabel}</div>
+                </button>
+              `;
+            })}
+          </div>
+          <p class="hint preset-meta">
+            <strong>Selected:</strong>
+            ${(presets[currentPreset] && presets[currentPreset].label) || "Default"}
+          </p>
         </div>
 
         <div class="section">
@@ -289,9 +356,9 @@ class EnergyFlowCardEditor extends LitElement {
             presetCfg.inverter_image || "(text tile)"
           )}
           <p class="hint">
-            Leave blank to use the preset's image. The selected inverter
-            preset auto-fills a built-in photo for SG04LP1 inverters
-            (Inverex / Deye / Sunsynk). For others, paste a URL — e.g.
+            Leave blank to use the preset's image. Each branded preset
+            (Sunsynk, Deye, Inverex, GoodWe, Growatt, Victron) ships with
+            its own bundled photo. For anything else, paste a URL — e.g.
             <code>/local/my-inverter.png</code> — or leave blank for the
             orange text tile.
           </p>
@@ -454,6 +521,111 @@ class EnergyFlowCardEditor extends LitElement {
         font-size: 11px;
         color: var(--secondary-text-color);
         font-style: italic;
+      }
+
+      /* ---- Brand-tile inverter picker --------------------------- */
+      .brand-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+        gap: 10px;
+        margin-top: 4px;
+      }
+      .brand-tile {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        padding: 10px 8px;
+        background: var(--card-background-color,
+                    var(--ha-card-background, #1c1c1c));
+        border: 2px solid var(--divider-color, rgba(255,255,255,0.12));
+        border-radius: 10px;
+        color: var(--primary-text-color);
+        font: inherit;
+        cursor: pointer;
+        transition: border-color 0.15s ease,
+                    transform 0.15s ease,
+                    box-shadow 0.15s ease,
+                    background-color 0.15s ease;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .brand-tile:hover {
+        border-color: var(--primary-color);
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+      }
+      .brand-tile:focus-visible {
+        outline: none;
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 2px var(--primary-color);
+      }
+      .brand-tile.selected {
+        border-color: var(--primary-color);
+        background: color-mix(in srgb, var(--primary-color) 10%, transparent);
+        box-shadow: 0 0 0 1px var(--primary-color) inset;
+      }
+      .brand-thumb {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--secondary-background-color, rgba(255,255,255,0.04));
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .brand-thumb img {
+        max-width: 80%;
+        max-height: 80%;
+        object-fit: contain;
+        pointer-events: none;
+      }
+      .brand-placeholder {
+        color: var(--secondary-text-color);
+        opacity: 0.7;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .brand-tile.is-default .brand-thumb {
+        background: repeating-linear-gradient(
+          45deg,
+          var(--secondary-background-color, rgba(255,255,255,0.04)),
+          var(--secondary-background-color, rgba(255,255,255,0.04)) 6px,
+          transparent 6px,
+          transparent 12px
+        );
+      }
+      .brand-label {
+        font-size: 12px;
+        font-weight: 500;
+        text-align: center;
+        line-height: 1.2;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .check-badge {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        min-width: 18px;
+        height: 18px;
+        padding: 0 4px;
+        background: var(--primary-color);
+        color: var(--text-primary-color, #fff);
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 18px;
+        text-align: center;
+        border-radius: 9px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+      }
+      .preset-meta {
+        margin-top: 4px;
       }
     `;
   }
