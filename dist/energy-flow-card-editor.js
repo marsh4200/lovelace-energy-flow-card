@@ -59,6 +59,9 @@ class EnergyFlowCardEditor extends LitElement {
   constructor() {
     super();
     this._ready = false;
+    // Bind delegated handlers so `this` survives being passed by reference
+    // into lit-html templates (lit-element 2.4 doesn't auto-bind).
+    this._onBrandGridClick = this._onBrandGridClick.bind(this);
   }
 
   async connectedCallback() {
@@ -134,12 +137,16 @@ class EnergyFlowCardEditor extends LitElement {
    *  user never customised them). Used by both the visual tile picker
    *  and the legacy select fallback. */
   _setPreset(key) {
-    if (!key || this._config.inverter_preset === key) return;
+    if (!key) return;
+    // Normalise: an unset inverter_preset is treated as "default".
+    const current = this._config.inverter_preset || "default";
+    if (current === key) return;
+
     const newConfig = { ...this._config, inverter_preset: key };
     delete newConfig.invert_battery_sign;
     delete newConfig.invert_grid_sign;
     const presets = (typeof window !== "undefined" && window._efcInverterPresets) || {};
-    const oldPreset = presets[this._config.inverter_preset]?.config || {};
+    const oldPreset = presets[current]?.config || {};
     if (oldPreset.inverter_label &&
         this._config.inverter_label === oldPreset.inverter_label) {
       delete newConfig.inverter_label;
@@ -149,6 +156,23 @@ class EnergyFlowCardEditor extends LitElement {
       delete newConfig.inverter_image;
     }
     this._emit(newConfig);
+  }
+
+  /** Delegated click handler for the brand-tile grid. Walks up from the
+   *  click target until it finds an element with data-preset-key, so
+   *  taps anywhere inside a tile (image, label, thumb wrapper) still
+   *  select the correct preset. */
+  _onBrandGridClick(ev) {
+    let el = ev.target;
+    while (el && el !== ev.currentTarget) {
+      const key = el.getAttribute && el.getAttribute("data-preset-key");
+      if (key) {
+        ev.stopPropagation();
+        this._setPreset(key);
+        return;
+      }
+      el = el.parentNode;
+    }
   }
 
   _toggleChanged(field, ev) {
@@ -306,7 +330,12 @@ class EnergyFlowCardEditor extends LitElement {
             and label. Choose <strong>Default</strong> for no overrides.
             Anything you set manually below still wins over the preset.
           </p>
-          <div class="brand-grid" role="radiogroup" aria-label="Inverter preset">
+          <div
+            class="brand-grid"
+            role="radiogroup"
+            aria-label="Inverter preset"
+            @click=${this._onBrandGridClick}
+          >
             ${orderedKeys.map((key) => {
               const p = presets[key] || {};
               const iconUrl = resolveIcon(p.icon);
@@ -316,26 +345,26 @@ class EnergyFlowCardEditor extends LitElement {
                 (isDefault ? "None" : (p.label || key).split(" ")[0]);
               const fullLabel = p.label || key;
               return html`
-                <button
-                  type="button"
+                <div
                   class="brand-tile ${isSelected ? "selected" : ""} ${isDefault ? "is-default" : ""}"
                   role="radio"
+                  tabindex="0"
                   aria-checked=${isSelected}
                   title=${fullLabel}
-                  @click=${() => this._setPreset(key)}
+                  data-preset-key=${key}
                 >
-                  <div class="brand-thumb">
+                  <div class="brand-thumb" data-preset-key=${key}>
                     ${iconUrl
-                      ? html`<img src=${iconUrl} alt=${fullLabel} loading="lazy" />`
-                      : html`<div class="brand-placeholder">
+                      ? html`<img src=${iconUrl} alt=${fullLabel} loading="lazy" data-preset-key=${key} />`
+                      : html`<div class="brand-placeholder" data-preset-key=${key}>
                           <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
                             <path fill="currentColor" d="M12 2 1 9l4 1.5V17l7 4 7-4v-6.5l2-.7V17h2V9zM12 4.3 18.5 9 12 13.7 5.5 9zM7 11.5l5 3.2 5-3.2V15l-5 2.9L7 15z"/>
                           </svg>
                         </div>`}
                     ${isSelected ? html`<span class="check-badge" aria-hidden="true">✓</span>` : null}
                   </div>
-                  <div class="brand-label">${shortLabel}</div>
-                </button>
+                  <div class="brand-label" data-preset-key=${key}>${shortLabel}</div>
+                </div>
               `;
             })}
           </div>
@@ -544,6 +573,7 @@ class EnergyFlowCardEditor extends LitElement {
         color: var(--primary-text-color);
         font: inherit;
         cursor: pointer;
+        user-select: none;
         transition: border-color 0.15s ease,
                     transform 0.15s ease,
                     box-shadow 0.15s ease,
