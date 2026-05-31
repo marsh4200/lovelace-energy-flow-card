@@ -4,6 +4,8 @@ A live, cinematic energy monitoring card for Home Assistant Lovelace dashboards.
 
 Shows a real scene — sun arcing across the sky based on `sun.sun`, photons hitting your solar panels, power flowing into the inverter, the inverter distributing to your battery and home, with rolling **today / this month / this year** totals underneath for solar, grid import, grid export and home consumption.
 
+The sky behind the scene is **live**: it tracks the time of day (vivid blue by day, warm at dawn/dusk, a dark sky with a moon and twinkling stars at night) and, if you point it at a Home Assistant `weather.*` entity, it shows drifting clouds, rain when it's raining and snow when it's snowing.
+
 Fully UI-configurable. No YAML editing required to add or change entities.
 
 ---
@@ -147,7 +149,13 @@ inverter_efficiency: sensor.inverter_efficiency  # optional
 sun_entity: sun.sun
 show_sun_arc: true
 
+# Live weather sky (optional)
+weather_entity: weather.forecast_home   # any weather.* entity
+
 # Totals — solar
+# Configure the monthly/yearly sensors too (not just daily): when present
+# they're read straight from Home Assistant, so every device shows the same
+# numbers. Leave them out and the card falls back to a per-device estimate.
 solar_daily: sensor.solar_daily
 solar_monthly: sensor.solar_monthly
 solar_yearly: sensor.solar_yearly
@@ -202,8 +210,11 @@ Make sure your `battery_soc` sensor reports 0–100, not 0–1.
 **"Custom element doesn't exist: energy-flow-card"**
 Resource wasn't registered or the browser cached the old page. Re-add the resource and hard-refresh.
 
+**Totals differ between devices / don't match your sensors**
+The month and year columns can only match across devices if the card reads the real Home Assistant monthly and yearly sensors. Set `solar_monthly` / `solar_yearly`, `grid_import_monthly` / `_yearly`, `grid_export_monthly` / `_yearly` and `home_monthly` / `_yearly` (the `utility_meter` helpers from step 2). When those are configured the values come straight from HA and are identical everywhere. If you only configure the daily sensors, the card estimates month/year locally in each browser, so different devices will drift apart — that's expected for the fallback.
+
 ---
 
 ## Version
 
-v1.0.0
+v2.1.0

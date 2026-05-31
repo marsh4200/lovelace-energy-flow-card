@@ -601,8 +601,14 @@ class EnergyFlowCard extends LitElement {
    * --------------------------------------------------------------- */
   _renderSky(uid, sun, cond, speed) {
     const sky = this._initSky();
-    const elevation = this._safeNum(this._attr(this._config.sun_entity || "sun.sun", "elevation", 10), 10);
-    const isNight = !sun.visible || elevation < -2;
+    // Day vs night is driven purely by the sun's elevation (the same
+    // signal the rest of the card uses). Above the horizon -> day sky
+    // with clouds; below -> night sky with moon + stars. We do NOT gate
+    // this on sun.visible, because that flag is only true while the sun
+    // glyph sits on the drawn arc and would wrongly force perpetual night.
+    const elevation = this._safeNum(
+      this._attr(this._config.sun_entity || "sun.sun", "elevation", null), null);
+    const isNight = elevation !== null ? elevation < -1 : !sun.visible;
 
     const now = new Date();
     const hr = now.getHours() + now.getMinutes() / 60;
