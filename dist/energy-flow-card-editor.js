@@ -299,6 +299,7 @@ class EnergyFlowCardEditor extends LitElement {
 
     const sensorDomains = ["sensor"];
     const sunDomains = ["sun"];
+    const weatherDomains = ["weather"];
 
     // Pull the preset list registered by the card module. Fall back to
     // a minimal hard-coded set if the card script hasn't loaded yet
@@ -477,21 +478,38 @@ class EnergyFlowCardEditor extends LitElement {
         </div>
 
         <div class="section">
-          <h3>Sun tracking</h3>
+          <h3>Sun &amp; sky</h3>
           <p class="hint">Sun position is computed from your real sunrise/sunset times.</p>
           ${this._renderEntityPicker("sun_entity", "Sun entity", sunDomains)}
+          <p class="hint">
+            Optional: pick a <strong>weather</strong> entity to make the sky
+            live — drifting clouds by day, rain when it's raining, a moon and
+            stars at night.
+          </p>
+          ${this._renderEntityPicker("weather_entity", "Weather entity (optional)", weatherDomains)}
         </div>
 
         <div class="section">
           <h3>Daily energy totals (kWh)</h3>
           <p class="hint">
-            Pick the <strong>daily</strong> sensor for each category.
-            The card auto-tracks monthly and yearly totals from these.
+            Pick the <strong>daily</strong> sensor for each category. For
+            month/year totals that match across all your devices, also pick
+            the monthly and yearly sensors below — those are read straight
+            from Home Assistant. If you leave them blank the card falls back
+            to a per-device estimate (which can differ between devices).
           </p>
           ${this._renderEntityPicker("solar_daily", "Solar today (kWh)", sensorDomains)}
+          ${this._renderEntityPicker("solar_monthly", "Solar this month (kWh)", sensorDomains)}
+          ${this._renderEntityPicker("solar_yearly", "Solar this year (kWh)", sensorDomains)}
           ${this._renderEntityPicker("grid_import_daily", "Grid imported today (kWh)", sensorDomains)}
+          ${this._renderEntityPicker("grid_import_monthly", "Grid imported this month (kWh)", sensorDomains)}
+          ${this._renderEntityPicker("grid_import_yearly", "Grid imported this year (kWh)", sensorDomains)}
           ${this._renderEntityPicker("grid_export_daily", "Grid exported today (kWh)", sensorDomains)}
+          ${this._renderEntityPicker("grid_export_monthly", "Grid exported this month (kWh)", sensorDomains)}
+          ${this._renderEntityPicker("grid_export_yearly", "Grid exported this year (kWh)", sensorDomains)}
           ${this._renderEntityPicker("home_daily", "Home consumption today (kWh)", sensorDomains)}
+          ${this._renderEntityPicker("home_monthly", "Home consumption this month (kWh)", sensorDomains)}
+          ${this._renderEntityPicker("home_yearly", "Home consumption this year (kWh)", sensorDomains)}
           ${this._renderEntityPicker("battery_charge_daily", "Battery charged today (kWh)", sensorDomains)}
           ${this._renderEntityPicker("battery_discharged_daily", "Battery discharged today (kWh)", sensorDomains)}
         </div>

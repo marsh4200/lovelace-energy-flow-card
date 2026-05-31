@@ -1,12 +1,17 @@
 /**
  * Custom Energy Flow Card for Home Assistant
- * v2.0.3 — "Inverex" dark dashboard layout
+ * v2.1.0 — "Inverex" dark dashboard layout + live weather sky
  *
  * Redesigned around a central inverter tile with a battery on the
  * left, a grid pylon on the right, and the house (plus optional EV)
  * at the bottom. The sun arcs across the top with a power pill that
  * tracks its current position, and sunrise/sunset times sit at the
  * arc endpoints.
+ *
+ * v2.1.0 adds a weather + time-of-day sky behind the scene (drifting
+ * clouds, rain/snow, a night sky with moon and stars) driven by an
+ * optional weather.* entity, and reads real monthly/yearly utility_meter
+ * sensors when configured so totals match across every device.
  *
  * Keeps v1's auto-accumulating daily / monthly / yearly totals and
  * its entity-tracking model. All v1 config keys still work; new
@@ -242,6 +247,44 @@ function _todayKeys(d = new Date()) {
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * Sky colour helpers for the weather/time-of-day backdrop.            *
+ * ------------------------------------------------------------------ */
+function _hexToRgb(h) {
+  h = h.replace("#", "");
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+function _lerpCh(a, b, t) { return Math.round(a + (b - a) * t); }
+function _mixHex(h1, h2, t) {
+  const a = _hexToRgb(h1), b = _hexToRgb(h2);
+  return `rgb(${_lerpCh(a[0], b[0], t)},${_lerpCh(a[1], b[1], t)},${_lerpCh(a[2], b[2], t)})`;
+}
+
+// Keyframes across the 24h clock. Daytime is a deliberately vivid blue.
+const _SKY_STOPS = [
+  { h: 0,    t: "#0a1230", m: "#101d40", b: "#16264c" },
+  { h: 5,    t: "#0a1230", m: "#101d40", b: "#16264c" },
+  { h: 6.2,  t: "#243a6b", m: "#6a5a8c", b: "#d98a63" },  // dawn
+  { h: 7.5,  t: "#356bb4", m: "#6aa6df", b: "#e9c49a" },
+  { h: 10,   t: "#2b74cc", m: "#519fe6", b: "#a6d2f5" },  // full day (vivid blue)
+  { h: 15,   t: "#2b74cc", m: "#519fe6", b: "#a6d2f5" },
+  { h: 17.5, t: "#2c4f9a", m: "#8a6fae", b: "#f0b27a" },  // dusk
+  { h: 18.8, t: "#1f2a55", m: "#7a4a72", b: "#e07a55" },
+  { h: 20,   t: "#0a1230", m: "#101d40", b: "#16264c" },
+  { h: 24,   t: "#0a1230", m: "#101d40", b: "#16264c" },
+];
+
+function _skyBaseColors(hr) {
+  for (let i = 0; i < _SKY_STOPS.length - 1; i++) {
+    const a = _SKY_STOPS[i], c = _SKY_STOPS[i + 1];
+    if (hr >= a.h && hr <= c.h) {
+      const t = (hr - a.h) / (c.h - a.h || 1);
+      return { t: _mixHex(a.t, c.t, t), m: _mixHex(a.m, c.m, t), b: _mixHex(a.b, c.b, t) };
+    }
+  }
+  return { t: _SKY_STOPS[0].t, m: _SKY_STOPS[0].m, b: _SKY_STOPS[0].b };
+}
+
 function _accumulate(entityId, v) {
   if (!entityId) return { today: null, month: null, year: null };
 
@@ -441,11 +484,207 @@ class EnergyFlowCard extends LitElement {
     return 1;
   }
 
-  _resolveTotals(dailyEntityId) {
-    if (!dailyEntityId) return { today: null, month: null, year: null };
-    const v = this._toKWh(dailyEntityId);
-    if (v === null) return { today: null, month: null, year: null };
-    return _accumulate(dailyEntityId, v);
+  /* Resolve today / month / year totals for one category.
+   *
+   * IMPORTANT (cross-device correctness): if the user has configured the
+   * real monthly / yearly utility_meter sensors, we read them DIRECTLY.
+   * Those live in Home Assistant's backend, so every device (phone,
+   * tablet, laptop) sees identical values. We only fall back to the old
+   * per-browser localStorage accumulator for whichever of month / year
+   * is NOT configured -- that fallback is inherently device-local and
+   * will differ between browsers, which is exactly the bug we're
+   * avoiding when the proper sensors exist.
+   */
+  _resolveTotals(dailyEntityId, monthlyEntityId, yearlyEntityId) {
+    const today = dailyEntityId ? this._toKWh(dailyEntityId) : null;
+
+    const monthDirect = monthlyEntityId ? this._toKWh(monthlyEntityId) : null;
+    const yearDirect  = yearlyEntityId  ? this._toKWh(yearlyEntityId)  : null;
+
+    // Both authoritative sensors present -> no localStorage, fully synced.
+    if (monthDirect !== null && yearDirect !== null) {
+      return { today, month: monthDirect, year: yearDirect };
+    }
+
+    // Otherwise fall back to the local accumulator for the missing piece(s).
+    let acc = { today: null, month: null, year: null };
+    if (dailyEntityId && today !== null) {
+      acc = _accumulate(dailyEntityId, today);
+    }
+
+    return {
+      today: today !== null ? today : acc.today,
+      month: monthDirect !== null ? monthDirect : acc.month,
+      year:  yearDirect  !== null ? yearDirect  : acc.year,
+    };
+  }
+
+  /* --------------------------------------------------------------- *
+   * Weather sky helpers.                                             *
+   *                                                                  *
+   * Reads an optional `weather_entity` (a standard HA weather.*      *
+   * entity) and maps its state onto a small set of render modes the  *
+   * sky layer understands. If no weather entity is configured (or it *
+   * isn't loaded yet) we return "clear" so the sky still tracks the  *
+   * time of day from sun.sun.                                        *
+   * --------------------------------------------------------------- */
+  _weatherCondition() {
+    const id = this._config.weather_entity;
+    if (!id) return "clear";
+    const s = this._state(id);
+    if (!s || !s.state) return "clear";
+    const c = String(s.state).toLowerCase();
+    if (c === "lightning" || c === "lightning-rainy" || c === "exceptional") return "storm";
+    if (c === "pouring") return "storm";
+    if (c === "rainy" || c === "hail") return "rain";
+    if (c === "snowy" || c === "snowy-rainy") return "snow";
+    if (c === "cloudy" || c === "fog") return "overcast";
+    if (c === "partlycloudy" || c === "windy" || c === "windy-variant") return "partly";
+    // sunny, clear-night, clear -> clear
+    return "clear";
+  }
+
+  /* How "covered" the sky is (0 clear .. 1 solid), per condition. Used
+   * to blend the sky colour toward grey and to pick cloud count/shade.
+   * Tuned deliberately light per the design review. */
+  _cloudiness(cond) {
+    return { clear: 0.04, partly: 0.16, overcast: 0.52, rain: 0.58, storm: 0.7, snow: 0.52 }[cond] || 0;
+  }
+  _cloudCount(cond) {
+    return { clear: 0, partly: 2, overcast: 3, rain: 3, storm: 4, snow: 3 }[cond] || 0;
+  }
+
+  /* Stable random particle layout (stars / rain / snow), computed once
+   * per instance so they don't jump around on every re-render (which
+   * would fight the CSS animations and re-roll the twinkle pattern). */
+  _initSky() {
+    if (this._sky) return this._sky;
+    const rnd = (a, b) => a + Math.random() * (b - a);
+    const stars = [];
+    for (let i = 0; i < 46; i++) {
+      stars.push({ x: rnd(8, 692), y: rnd(8, 200), r: rnd(0.6, 1.7), d: rnd(2, 5), delay: rnd(0, 4) });
+    }
+    const rain = [];
+    for (let i = 0; i < 38; i++) {
+      rain.push({ x: rnd(0, 700), len: rnd(12, 19), delay: rnd(0, 1.05).toFixed(2) });
+    }
+    const snow = [];
+    for (let i = 0; i < 32; i++) {
+      snow.push({ x: rnd(0, 700), r: rnd(1.3, 2.6), d: rnd(4.5, 7.5).toFixed(1), delay: rnd(0, 6).toFixed(1) });
+    }
+    const clouds = [];
+    for (let i = 0; i < 4; i++) {
+      const dur = rnd(55, 85);
+      clouds.push({ cy: rnd(28, 150), sc: rnd(0.7, 1.2), dur: dur.toFixed(0), delay: (-(i / 4) * dur - rnd(0, 8)).toFixed(1) });
+    }
+    this._sky = { stars, rain, snow, clouds };
+    return this._sky;
+  }
+
+  /* Moon position along the same top arc the sun uses, derived from the
+   * local clock (the moon doesn't come from sun.sun). Maps 18:00 -> left,
+   * 06:00 -> right, peaking around midnight. */
+  _moonPos(archLeft, archRight, baseY, apexY) {
+    const now = new Date();
+    const h = now.getHours() + now.getMinutes() / 60;
+    let mh = h < 6 ? h + 24 : h;            // 18..30 window
+    const t = Math.max(0, Math.min(1, (mh - 18) / 12));
+    const x = archLeft + (archRight - archLeft) * t;
+    const y = baseY - Math.sin(Math.PI * t) * (baseY - apexY);
+    return { x, y };
+  }
+
+  /* --------------------------------------------------------------- *
+   * Weather + time-of-day sky backdrop. Rendered BEHIND the sun arc  *
+   * and the rest of the scene. The bottom of the sky melts into the  *
+   * dark dashboard background so there's no hard seam.               *
+   * --------------------------------------------------------------- */
+  _renderSky(uid, sun, cond, speed) {
+    const sky = this._initSky();
+    const elevation = this._safeNum(this._attr(this._config.sun_entity || "sun.sun", "elevation", 10), 10);
+    const isNight = !sun.visible || elevation < -2;
+
+    const now = new Date();
+    const hr = now.getHours() + now.getMinutes() / 60;
+    const base = _skyBaseColors(hr);
+
+    // Blend toward grey by how cloudy it is (kept light per design review).
+    const cl = this._cloudiness(cond) * 0.65;
+    const gT = isNight ? "#252c38" : "#9aa6b2";
+    const gM = isNight ? "#2e3744" : "#aab4be";
+    const topC = _mixHex(base.t, gT, cl);
+    const midC = _mixHex(base.m, gM, cl);
+    // Bottom always melts into the card's dark dashboard bg (#0E1521).
+    const botC = "#0E1521";
+
+    const cloudCount = this._cloudCount(cond);
+    const cloudFill = isNight
+      ? ({ partly: "#3a4250", overcast: "#323b4b", rain: "#29303d", storm: "#202632", snow: "#363e4c" }[cond] || "#3a4250")
+      : ({ partly: "#f6f9fc", overcast: "#c2cbd4", rain: "#8b95a0", storm: "#646c77", snow: "#b6bfc9" }[cond] || "#ffffff");
+
+    const isRain = cond === "rain" || cond === "storm";
+    const isSnow = cond === "snow";
+    const isStorm = cond === "storm";
+
+    const cloud = (c) => svg`
+      <g class="efc-cloud" opacity="${isNight ? 0.85 : 0.9}"
+         style="animation-duration:${c.dur}s;animation-delay:${c.delay}s">
+        <ellipse cx="2"  cy="${c.cy + 12}" rx="${(46 * c.sc).toFixed(0)}" ry="${(15 * c.sc).toFixed(0)}" fill="${cloudFill}" />
+        <circle  cx="0"  cy="${c.cy}"      r="${(26 * c.sc).toFixed(0)}" fill="${cloudFill}" />
+        <circle  cx="${(28 * c.sc).toFixed(0)}"  cy="${c.cy + 5}"  r="${(21 * c.sc).toFixed(0)}" fill="${cloudFill}" />
+        <circle  cx="${(-27 * c.sc).toFixed(0)}" cy="${c.cy + 7}"  r="${(19 * c.sc).toFixed(0)}" fill="${cloudFill}" />
+        <circle  cx="${(9 * c.sc).toFixed(0)}"   cy="${c.cy - 13}" r="${(19 * c.sc).toFixed(0)}" fill="${cloudFill}" />
+      </g>`;
+
+    return svg`
+      <!-- Sky gradient (melts to dashboard navy at the bottom) -->
+      <linearGradient id="${uid}-skyGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%"  stop-color="${topC}" />
+        <stop offset="45%" stop-color="${midC}" />
+        <stop offset="100%" stop-color="${botC}" />
+      </linearGradient>
+      <radialGradient id="${uid}-moonGlow" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#e8ecf2" stop-opacity="0.5" />
+        <stop offset="100%" stop-color="#e8ecf2" stop-opacity="0" />
+      </radialGradient>
+      <rect x="0" y="0" width="700" height="360" fill="url(#${uid}-skyGrad)" />
+
+      ${isNight ? svg`
+        <g class="efc-stars">
+          ${sky.stars.map((s) => svg`
+            <circle class="efc-star" cx="${s.x.toFixed(1)}" cy="${s.y.toFixed(1)}" r="${s.r.toFixed(1)}"
+                    fill="#FDFDFF"
+                    style="animation-duration:${(s.d * speed).toFixed(1)}s;animation-delay:${s.delay.toFixed(1)}s" />`)}
+        </g>
+        ${(() => {
+          const mp = this._moonPos(80, 620, sun.archBaseY, sun.archApexY);
+          const md = (cond === "clear" || cond === "partly") ? 1 : 0.6;
+          return svg`
+            <circle cx="${mp.x}" cy="${mp.y}" r="34" fill="url(#${uid}-moonGlow)" opacity="${md}" />
+            <circle cx="${mp.x}" cy="${mp.y}" r="16" fill="#E9EDF3" opacity="${md}" />`;
+        })()}
+      ` : ""}
+
+      ${cloudCount > 0 ? svg`<g class="efc-clouds">${sky.clouds.slice(0, cloudCount).map(cloud)}</g>` : ""}
+
+      ${isRain ? svg`
+        <g class="efc-rain ${isStorm ? "efc-rain-storm" : ""}">
+          ${sky.rain.map((d) => svg`
+            <line class="efc-rdrop" x1="${d.x.toFixed(1)}" y1="0" x2="${(d.x - 3).toFixed(1)}" y2="${d.len.toFixed(1)}"
+                  style="animation-delay:-${d.delay}s" />`)}
+        </g>
+      ` : ""}
+
+      ${isSnow ? svg`
+        <g class="efc-snow">
+          ${sky.snow.map((s) => svg`
+            <circle class="efc-sflake" cx="${s.x.toFixed(1)}" cy="0" r="${s.r.toFixed(1)}" fill="#EEF3F8"
+                    style="animation-duration:${s.d}s;animation-delay:-${s.delay}s" />`)}
+        </g>
+      ` : ""}
+
+      ${isStorm ? svg`<rect class="efc-flash" x="0" y="0" width="700" height="360" fill="#EAF2FF" />` : ""}
+    `;
   }
 
   /* --------------------------------------------------------------- *
@@ -587,6 +826,7 @@ class EnergyFlowCard extends LitElement {
     const cfg = this._config;
     const speed = this._speedMult();
     const uid = this._uid;
+    const cond = this._weatherCondition();
 
     /* ---------- Read live values ---------- */
     const solarW = this._toW(cfg.solar_power);
@@ -666,10 +906,10 @@ class EnergyFlowCard extends LitElement {
     const GRID  = { cx: 610, cy: 460 };
 
     /* ---------- Totals (auto-accumulated) ---------- */
-    const tSolar   = this._resolveTotals(cfg.solar_daily);
-    const tGridIn  = this._resolveTotals(cfg.grid_import_daily);
-    const tGridOut = this._resolveTotals(cfg.grid_export_daily);
-    const tHome    = this._resolveTotals(cfg.home_daily);
+    const tSolar   = this._resolveTotals(cfg.solar_daily,        cfg.solar_monthly,        cfg.solar_yearly);
+    const tGridIn  = this._resolveTotals(cfg.grid_import_daily,  cfg.grid_import_monthly,  cfg.grid_import_yearly);
+    const tGridOut = this._resolveTotals(cfg.grid_export_daily,  cfg.grid_export_monthly,  cfg.grid_export_yearly);
+    const tHome    = this._resolveTotals(cfg.home_daily,         cfg.home_monthly,         cfg.home_yearly);
 
     const totals = {
       solar:   [tSolar.today,   tSolar.month,   tSolar.year],
@@ -776,6 +1016,9 @@ class EnergyFlowCard extends LitElement {
                   <rect x="-31" y="-62" width="62" height="124" rx="5" />
                 </clipPath>
               </defs>
+
+              <!-- ===== WEATHER + TIME-OF-DAY SKY (behind everything) ===== -->
+              ${this._renderSky(uid, sun, cond, speed)}
 
               <!-- ===== SUN ARC ===== -->
               <!-- Full faint arc -->
@@ -1473,6 +1716,38 @@ class EnergyFlowCard extends LitElement {
         width: 100%;
         height: auto;
         display: block;
+      }
+
+      /* ---------- Weather sky animations ---------- */
+      .efc-cloud { animation: efc-drift linear infinite; }
+      .efc-rdrop {
+        stroke: rgba(190, 215, 240, 0.42);
+        stroke-width: 1.3;
+        stroke-linecap: round;
+        transform: translateY(-30px);
+        animation: efc-fall 1.05s linear infinite;
+      }
+      .efc-rain-storm .efc-rdrop {
+        stroke: rgba(200, 222, 244, 0.55);
+        animation-duration: 0.65s;
+      }
+      .efc-sflake {
+        transform: translateY(-20px);
+        animation: efc-snowfall 6.5s linear infinite;
+      }
+      .efc-star { animation: efc-twinkle 3s ease-in-out infinite; }
+      .efc-flash { opacity: 0; animation: efc-flash 9s linear infinite; }
+      @keyframes efc-drift { from { transform: translateX(-230px); } to { transform: translateX(740px); } }
+      @keyframes efc-fall { to { transform: translateY(360px); } }
+      @keyframes efc-snowfall { to { transform: translate(10px, 360px); } }
+      @keyframes efc-twinkle { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+      @keyframes efc-flash {
+        0%, 3%, 7%, 100% { opacity: 0; }
+        1.5% { opacity: 0.4; }
+        5% { opacity: 0.2; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .efc-cloud, .efc-rdrop, .efc-sflake, .efc-star, .efc-flash { animation: none; }
       }
 
       /* ---------- Bars ---------- */
