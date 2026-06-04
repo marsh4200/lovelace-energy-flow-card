@@ -2,6 +2,11 @@
  * Custom Energy Flow Card for Home Assistant
  * v2.1.0 — "Inverex" dark dashboard layout + live weather sky
  *
+ * v2.1.2 — Hardened day/night detection: the sky never silently falls
+ * back to a permanent dark/night palette. Day vs night is driven by the
+ * sun's real elevation, with a local-clock daytime window as the only
+ * fallback when elevation is unavailable. Single, honest version stamp.
+ *
  * Redesigned around a central inverter tile with a battery on the
  * left, a grid pylon on the right, and the house (plus optional EV)
  * at the bottom. The sun arcs across the top with a power pill that
@@ -608,7 +613,15 @@ class EnergyFlowCard extends LitElement {
     // glyph sits on the drawn arc and would wrongly force perpetual night.
     const elevation = this._safeNum(
       this._attr(this._config.sun_entity || "sun.sun", "elevation", null), null);
-    const isNight = elevation !== null ? elevation < -1 : !sun.visible;
+    // Day vs night comes from the sun's real elevation. If (and only if)
+    // the elevation attribute is genuinely missing, fall back to a simple
+    // local-clock daytime window (06:00-19:00) rather than sun.visible --
+    // sun.visible is only true while the glyph sits on the drawn arc and
+    // would otherwise force a permanent dark/night sky during the day.
+    const _clockHr = new Date().getHours() + new Date().getMinutes() / 60;
+    const isNight = elevation !== null
+      ? elevation < -1
+      : (_clockHr < 6 || _clockHr >= 19);
 
     const now = new Date();
     const hr = now.getHours() + now.getMinutes() / 60;
@@ -1959,7 +1972,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c ENERGY-FLOW-CARD %c v2.0.3 ",
+  "%c ENERGY-FLOW-CARD %c v2.1.2 ",
   "color: white; background: #EF9F27; font-weight: 700;",
   "color: white; background: #1FA8E0; font-weight: 700;"
 );

@@ -217,4 +217,4 @@ The month and year columns can only match across devices if the card reads the r
 
 ## Version
 
-v2.1.0
+v2.1.2
