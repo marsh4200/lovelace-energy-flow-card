@@ -2,6 +2,14 @@
  * Custom Energy Flow Card for Home Assistant
  * v2.1.0 — "Inverex" dark dashboard layout + live weather sky
  *
+ * v2.1.3 — Fixed the daytime sky rendering black. The sky gradient is
+ * blended twice (base time-of-day colour, then toward the cloud/grey
+ * target). The first blend returns an "rgb(r,g,b)" string, but the colour
+ * parser only understood hex, so the second blend produced NaN for the red
+ * channel and the browser drew the invalid stop-colour as solid black. At
+ * night the intended sky is already dark so it looked fine; by day it stayed
+ * black with no blue/sun. The parser now accepts rgb() as well as hex.
+ *
  * v2.1.2 — Hardened day/night detection: the sky never silently falls
  * back to a permanent dark/night palette. Day vs night is driven by the
  * sun's real elevation, with a local-clock daytime window as the only
@@ -256,7 +264,19 @@ function _todayKeys(d = new Date()) {
  * Sky colour helpers for the weather/time-of-day backdrop.            *
  * ------------------------------------------------------------------ */
 function _hexToRgb(h) {
+  // Accept BOTH "#rrggbb"/"#rgb" hex AND "rgb(r,g,b)" strings. This matters
+  // because _mixHex() returns an rgb(...) string, and _renderSky() mixes a
+  // second time on top of that result (base sky colour -> blended toward the
+  // cloud/grey target). If we only understood hex, that second pass parsed
+  // "rgb(...)" as hex, produced NaN for the red channel, and the browser
+  // rendered the invalid stop-colour as solid black -- which is exactly why
+  // the daytime sky stayed black while the (already-dark) night sky looked
+  // fine. Parsing rgb() here keeps the blend valid all day long.
+  h = String(h).trim();
+  const m = h.match(/rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)/i);
+  if (m) return [Math.round(+m[1]), Math.round(+m[2]), Math.round(+m[3])];
   h = h.replace("#", "");
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
 }
 function _lerpCh(a, b, t) { return Math.round(a + (b - a) * t); }
@@ -1972,7 +1992,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c ENERGY-FLOW-CARD %c v2.1.2 ",
+  "%c ENERGY-FLOW-CARD %c v2.1.3 ",
   "color: white; background: #EF9F27; font-weight: 700;",
   "color: white; background: #1FA8E0; font-weight: 700;"
 );
