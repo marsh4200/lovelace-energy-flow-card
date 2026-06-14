@@ -1605,6 +1605,9 @@ class EnergyFlowCard extends LitElement {
           <!-- ====================== OPTIONAL TOTALS TABLE ====================== -->
           ${cfg.show_totals ? html`
             <div class="totals">
+              <div class="totals-head">
+                <span></span><span>Today</span><span>Month</span><span>Year</span>
+              </div>
               ${this._totalsRow("Solar",    "#EF9F27", totals.solar)}
               ${this._totalsRow("Grid in",  "#5DBFEB", totals.gridIn)}
               ${this._totalsRow("Grid out", "#3FD698", totals.gridOut)}
@@ -1960,6 +1963,7 @@ class EnergyFlowCard extends LitElement {
         flex-direction: column;
         gap: 6px;
       }
+      .totals-head { display: none; }
       .totals-row {
         display: grid;
         grid-template-columns: 80px repeat(3, minmax(0, 1fr));
@@ -2005,52 +2009,95 @@ class EnergyFlowCard extends LitElement {
         color: #9CA3AF;
       }
 
-      /* ---------- Mobile ---------- */
+      /* ---------- Mobile: keep the full scene, shrink everything else
+         so the whole card lands on one phone screen. ---------- */
       @media (max-width: 480px) {
-        .card-content { padding: 12px 12px 14px; }
+        .card-content { padding: 10px 12px 12px; }
 
-        .header { padding-bottom: 8px; }
-        .header-title { font-size: 12px; letter-spacing: 0.08em; }
+        .header { padding-bottom: 6px; margin-bottom: 2px; }
+        .header-title { font-size: 12px; letter-spacing: 0.06em; }
         .header-badge { font-size: 10px; padding: 2px 8px; }
 
-        .scene { margin: 0 -4px; }
+        /* Scene stays full (nothing removed) but is bounded to the top
+           portion of the viewport so the data below always fits the same
+           screen. Aspect ratio is preserved, so it just scales down a
+           touch on shorter phones rather than pushing the data off-screen. */
+        .scene { margin: 0 -4px; text-align: center; }
+        .scene svg {
+          width: auto;
+          max-width: 100%;
+          height: auto;
+          max-height: 60vh;
+          margin: 0 auto;
+        }
 
-        .bars { gap: 10px 12px; margin: 6px 0 12px; padding: 0; }
-        .bar-label { font-size: 11px; min-width: 24px; }
+        /* Power bars: thin strip. */
+        .bars { gap: 6px 12px; margin: 6px 0 8px; padding: 0; }
+        .bar-label { font-size: 10px; min-width: 22px; }
+        .bar-cells { height: 12px; }
+        .bar-cell-sm { height: 4px; }
+        .bar-cell-md { height: 8px; }
+        .bar-cell-lg { height: 12px; }
 
-        .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
-        .stat-cell { padding: 10px; }
-        .stat-label { font-size: 10px; }
-        .stat-value { font-size: 15px; white-space: normal; }
+        /* Optional stats: dense, no wasted card chrome. */
+        .stats-grid { grid-template-columns: repeat(3, 1fr); gap: 5px; margin-bottom: 8px; }
+        .stat-cell { padding: 6px 7px; border-radius: 7px; }
+        .stat-label { font-size: 9px; margin-bottom: 2px; }
+        .stat-value { font-size: 13px; }
 
-        .footer-cards { grid-template-columns: repeat(2, 1fr); gap: 8px; }
-        .footer-card { padding: 10px 6px; }
-        .footer-card-icon { font-size: 20px; }
-        .footer-card-value { font-size: 16px; }
+        /* Drop the decorative "INVERTER" header row on phones. */
+        .footer-header { display: none; }
 
-        /* Totals: stack the category label above its three cells so the
-           kWh numbers always have room and never overflow. */
+        /* Four compact tiles in a single row (not 2x2). */
+        .footer-cards { grid-template-columns: repeat(4, 1fr); gap: 5px; }
+        .footer-card { padding: 7px 3px; border-radius: 8px; gap: 2px; }
+        .footer-card-icon { font-size: 16px; }
+        .footer-card-label { font-size: 8px; letter-spacing: 0.04em; }
+        .footer-card-value { font-size: 13px; }
+
+        /* Totals: collapse the 4 stacked blocks into one dense table —
+           a single header row, then one tight line per category. */
+        .totals { margin-top: 8px; padding-top: 8px; gap: 2px; }
+        .totals-head {
+          display: grid;
+          grid-template-columns: 58px repeat(3, 1fr);
+          gap: 4px;
+          padding: 0 0 2px;
+          font-size: 8px;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+          color: #9CA3AF;
+          text-align: right;
+        }
+        .totals-head span:first-child { text-align: left; }
+
         .totals-row {
-          grid-template-columns: repeat(3, 1fr);
-          gap: 5px;
-          row-gap: 4px;
+          grid-template-columns: 58px repeat(3, 1fr);
+          gap: 4px;
+          align-items: center;
         }
-        .totals-label-cell {
-          grid-column: 1 / -1;
-          font-size: 12px;
-          margin-bottom: 1px;
+        .totals-label-cell { font-size: 11px; gap: 5px; }
+        .dot { width: 6px; height: 6px; }
+
+        /* Strip per-cell chrome: no backgrounds, no per-cell labels. */
+        .cell {
+          background: none;
+          padding: 0;
+          flex-direction: row;
+          justify-content: flex-end;
         }
-        .cell { padding: 4px 6px; }
-        .cell-label { font-size: 8px; }
-        .cell-value { font-size: 13px; }
-        .cell-unit { font-size: 9px; }
+        .cell-label { display: none; }
+        .cell-value { font-size: 12px; font-weight: 600; }
+        .cell-unit { display: none; }
       }
 
       /* ---------- Very narrow phones ---------- */
       @media (max-width: 360px) {
-        .card-content { padding: 10px 10px 12px; }
-        .footer-card-value { font-size: 15px; }
-        .stat-value { font-size: 14px; }
+        .card-content { padding: 8px 10px 10px; }
+        .footer-card-value { font-size: 12px; }
+        .stat-value { font-size: 12px; }
+        .cell-value { font-size: 11px; }
+        .totals-head, .totals-row { grid-template-columns: 50px repeat(3, 1fr); }
       }
     `;
   }
