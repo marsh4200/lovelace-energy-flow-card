@@ -1,5 +1,5 @@
 /**
- * Visual editor for energy-flow-card v2.2.0
+ * Visual editor for energy-flow-card v2.8
  *
  * Totals are now configured with just the daily ("today") sensor per
  * category — the card self-tracks month and year. The month/year pickers

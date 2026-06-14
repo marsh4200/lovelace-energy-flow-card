@@ -2,7 +2,7 @@
  * Custom Energy Flow Card for Home Assistant
  * v2.1.0 — "Inverex" dark dashboard layout + live weather sky
  *
- * v2.2.0 — Month/year self-tracking from a single daily sensor, plus a
+ * v2.8 — Month/year self-tracking from a single daily sensor, plus a
  * phone-friendly layout pass. You now only configure the *daily* sensor
  * for each category; the card builds running month + year totals from it
  * on its own (no month/year helpers required). The tracker only ever adds
@@ -2067,7 +2067,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c ENERGY-FLOW-CARD %c v2.2.0 ",
+  "%c ENERGY-FLOW-CARD %c v2.8 ",
   "color: white; background: #EF9F27; font-weight: 700;",
   "color: white; background: #1FA8E0; font-weight: 700;"
 );
