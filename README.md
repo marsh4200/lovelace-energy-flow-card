@@ -12,14 +12,16 @@ Fully UI-configurable. No YAML editing required to add or change entities.
 
 ## What you'll need
 
-Six live power sensors and twelve cumulative energy sensors. The live ones you almost certainly already have from your inverter integration. The cumulative ones we'll create with `utility_meter` helpers — see step 2.
+Six live power sensors and **four daily energy sensors** (one each for solar, grid import, grid export and home). That's it — the card builds the *this month* and *this year* totals from those daily sensors on its own. You do **not** need to create month or year helpers.
 
-| Live (W or kW) | Energy total (kWh) — needs daily/monthly/yearly |
+The live power sensors you almost certainly already have from your inverter integration. The daily energy ones are the standard "today" sensors most integrations expose, or a `utility_meter` with `cycle: daily` — see step 2.
+
+| Live (W or kW) | Energy total (kWh) — daily only |
 |---|---|
-| Solar power | Solar production |
-| Grid power (+ import / − export) | Grid import |
-| Battery power | Grid export |
-| Battery SoC (%) | Home consumption |
+| Solar power | Solar produced today |
+| Grid power (+ import / − export) | Grid imported today |
+| Battery power | Grid exported today |
+| Battery SoC (%) | Home used today |
 | Home consumption | |
 | Inverter efficiency (optional) | |
 
@@ -46,72 +48,44 @@ Six live power sensors and twelve cumulative energy sensors. The live ones you a
 
 ---
 
-## 2. Create the rolling totals (utility_meter)
+## 2. Daily totals (if you don't already have them)
 
-Add this to your `configuration.yaml` (or a package). Replace the `source:` values with your own sensor entity IDs.
+If your integration already gives you "today" energy sensors (solar produced today, grid imported today, etc.), skip this — just use those.
+
+Otherwise create four daily `utility_meter` helpers. Add this to your `configuration.yaml` (or a package) and replace each `source:` with your own cumulative kWh sensor:
 
 ```yaml
 utility_meter:
-  # ---------- Solar ----------
   solar_daily:
     source: sensor.solar_energy_total
     name: Solar today
     cycle: daily
-  solar_monthly:
-    source: sensor.solar_energy_total
-    name: Solar this month
-    cycle: monthly
-  solar_yearly:
-    source: sensor.solar_energy_total
-    name: Solar this year
-    cycle: yearly
 
-  # ---------- Grid import ----------
   grid_import_daily:
     source: sensor.grid_import_total
     name: Grid in today
     cycle: daily
-  grid_import_monthly:
-    source: sensor.grid_import_total
-    name: Grid in this month
-    cycle: monthly
-  grid_import_yearly:
-    source: sensor.grid_import_total
-    name: Grid in this year
-    cycle: yearly
 
-  # ---------- Grid export ----------
   grid_export_daily:
     source: sensor.grid_export_total
     name: Grid out today
     cycle: daily
-  grid_export_monthly:
-    source: sensor.grid_export_total
-    name: Grid out this month
-    cycle: monthly
-  grid_export_yearly:
-    source: sensor.grid_export_total
-    name: Grid out this year
-    cycle: yearly
 
-  # ---------- Home consumption ----------
   home_daily:
     source: sensor.home_energy_total
     name: Home today
     cycle: daily
-  home_monthly:
-    source: sensor.home_energy_total
-    name: Home this month
-    cycle: monthly
-  home_yearly:
-    source: sensor.home_energy_total
-    name: Home this year
-    cycle: yearly
 ```
 
-Restart Home Assistant. You'll get twelve new sensors named `sensor.solar_daily`, `sensor.solar_monthly`, etc.
+Restart Home Assistant. You'll get four sensors: `sensor.solar_daily`, `sensor.grid_import_daily`, `sensor.grid_export_daily`, `sensor.home_daily`. The card turns these into running month and year totals automatically.
 
-> **Tip:** if your inverter integration only gives you a single `..._energy_total` sensor for everything combined, you may need a couple of `template:` sensors first to split solar production, grid import and grid export apart. Most modern integrations (SolarEdge, Sungrow, Goodwe, Huawei FusionSolar, Solis, Victron, ESPHome) already expose them separately.
+> **Tip:** if your inverter only gives a single combined `..._energy_total`, you may need a couple of `template:` sensors first to split solar production, grid import and grid export apart. Most modern integrations (SolarEdge, Sungrow, Goodwe, Huawei FusionSolar, Solis, Victron, Deye/Sunsynk, ESPHome) already expose them separately.
+
+### How the month/year self-tracking works
+
+The card watches each daily sensor and only ever adds the *increase* between readings into its month and year buckets, so the totals climb steadily and never drop when the daily sensor resets at midnight (or after an HA restart or a brief glitch). Month and year reset strictly on the calendar — the 1st of the month, the 1st of the year — and nothing else.
+
+These running totals are stored in the browser, so the card counts what it sees while a dashboard is open. For most setups that's plenty. If you want month/year figures that stay exact even when no dashboard has been open, you can still create monthly/yearly `utility_meter` sensors and point the card's optional override fields at them (see the editor's "month / year override" section, or the config reference below) — but you never *have* to.
 
 ---
 
@@ -121,7 +95,7 @@ Restart Home Assistant. You'll get twelve new sensors named `sensor.solar_daily`
 2. The visual editor opens. Use the entity-picker dropdowns to fill in:
    - Live power sensors (5–6 entities)
    - `sun.sun` (auto-selected)
-   - Solar / Grid in / Grid out / Home — daily, monthly and yearly (12 entities)
+   - Solar / Grid in / Grid out / Home — **daily only** (4 entities)
 3. Optional: pick animation speed and particle density.
 4. Save.
 
@@ -152,28 +126,27 @@ show_sun_arc: true
 # Live weather sky (optional)
 weather_entity: weather.forecast_home   # any weather.* entity
 
-# Totals — solar
-# Configure the monthly/yearly sensors too (not just daily): when present
-# they're read straight from Home Assistant, so every device shows the same
-# numbers. Leave them out and the card falls back to a per-device estimate.
+# Totals — daily sensors only (the card self-tracks month & year)
 solar_daily: sensor.solar_daily
-solar_monthly: sensor.solar_monthly
-solar_yearly: sensor.solar_yearly
-
-# Totals — grid import
 grid_import_daily: sensor.grid_import_daily
-grid_import_monthly: sensor.grid_import_monthly
-grid_import_yearly: sensor.grid_import_yearly
-
-# Totals — grid export
 grid_export_daily: sensor.grid_export_daily
-grid_export_monthly: sensor.grid_export_monthly
-grid_export_yearly: sensor.grid_export_yearly
-
-# Totals — home
 home_daily: sensor.home_daily
-home_monthly: sensor.home_monthly
-home_yearly: sensor.home_yearly
+
+# Optional battery daily figures
+battery_charge_daily: sensor.battery_charge_daily
+battery_discharged_daily: sensor.battery_discharged_daily
+
+# Optional month/year override — only needed if you want figures that
+# stay exact even when no dashboard is open. Leave these out and the
+# card tracks month/year from the daily sensors above on its own.
+# solar_monthly: sensor.solar_monthly
+# solar_yearly: sensor.solar_yearly
+# grid_import_monthly: sensor.grid_import_monthly
+# grid_import_yearly: sensor.grid_import_yearly
+# grid_export_monthly: sensor.grid_export_monthly
+# grid_export_yearly: sensor.grid_export_yearly
+# home_monthly: sensor.home_monthly
+# home_yearly: sensor.home_yearly
 
 # Animation
 animation_speed: normal     # slow | normal | fast
@@ -186,6 +159,7 @@ particle_density: medium    # low  | medium | high
 
 - **Power values** auto-detect units. If your sensor reports `W`, the card converts to kW for display. If it reports `kW`, it's used as-is.
 - **Energy totals** auto-detect `Wh` / `kWh` / `MWh` and normalise to kWh.
+- **Month & year** are built from your daily sensors automatically — the card adds only the increase between readings, so they climb steadily and reset only on the 1st of the month / year. No month or year helpers required.
 - **Grid direction** is inferred from sign — positive means importing, negative means exporting. Adjust your sensor sign convention if it's flipped.
 - **Sun position** comes from `sun.sun` attributes:
   - `azimuth` (0–360°) → horizontal position along the sunrise→sunset arc

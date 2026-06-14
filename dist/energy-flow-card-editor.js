@@ -1,10 +1,9 @@
 /**
- * Visual editor for energy-flow-card v2.0.3
+ * Visual editor for energy-flow-card v2.2.0
  *
- * Covers the v1 config keys (still supported) plus the new optional
- * keys exposed by v2's expanded layout: PV1/PV2 split, battery
- * telemetry, inverter telemetry, EV charger, cell voltages, BMS temp,
- * endurance ETA, etc.
+ * Totals are now configured with just the daily ("today") sensor per
+ * category — the card self-tracks month and year. The month/year pickers
+ * still exist as an optional override, tucked into a collapsible section.
  */
 
 import {
@@ -490,28 +489,38 @@ class EnergyFlowCardEditor extends LitElement {
         </div>
 
         <div class="section">
-          <h3>Daily energy totals (kWh)</h3>
+          <h3>Energy totals (kWh)</h3>
           <p class="hint">
-            Pick the <strong>daily</strong> sensor for each category. For
-            month/year totals that match across all your devices, also pick
-            the monthly and yearly sensors below — those are read straight
-            from Home Assistant. If you leave them blank the card falls back
-            to a per-device estimate (which can differ between devices).
+            Pick just the <strong>daily ("today")</strong> sensor for each
+            category. The card tracks <strong>this&nbsp;month</strong> and
+            <strong>this&nbsp;year</strong> from it automatically — you don't
+            need to create or pick any month/year sensors.
           </p>
           ${this._renderEntityPicker("solar_daily", "Solar today (kWh)", sensorDomains)}
-          ${this._renderEntityPicker("solar_monthly", "Solar this month (kWh)", sensorDomains)}
-          ${this._renderEntityPicker("solar_yearly", "Solar this year (kWh)", sensorDomains)}
           ${this._renderEntityPicker("grid_import_daily", "Grid imported today (kWh)", sensorDomains)}
-          ${this._renderEntityPicker("grid_import_monthly", "Grid imported this month (kWh)", sensorDomains)}
-          ${this._renderEntityPicker("grid_import_yearly", "Grid imported this year (kWh)", sensorDomains)}
           ${this._renderEntityPicker("grid_export_daily", "Grid exported today (kWh)", sensorDomains)}
-          ${this._renderEntityPicker("grid_export_monthly", "Grid exported this month (kWh)", sensorDomains)}
-          ${this._renderEntityPicker("grid_export_yearly", "Grid exported this year (kWh)", sensorDomains)}
           ${this._renderEntityPicker("home_daily", "Home consumption today (kWh)", sensorDomains)}
-          ${this._renderEntityPicker("home_monthly", "Home consumption this month (kWh)", sensorDomains)}
-          ${this._renderEntityPicker("home_yearly", "Home consumption this year (kWh)", sensorDomains)}
           ${this._renderEntityPicker("battery_charge_daily", "Battery charged today (kWh)", sensorDomains)}
           ${this._renderEntityPicker("battery_discharged_daily", "Battery discharged today (kWh)", sensorDomains)}
+
+          <details class="advanced">
+            <summary>Optional: month / year override</summary>
+            <p class="hint">
+              Most people can ignore this. Only fill these in if you already
+              have Home Assistant monthly/yearly utility_meter sensors and
+              want the numbers to match exactly across every device, even
+              when no dashboard is open. Anything you leave blank keeps using
+              the card's own tracking.
+            </p>
+            ${this._renderEntityPicker("solar_monthly", "Solar this month (kWh)", sensorDomains)}
+            ${this._renderEntityPicker("solar_yearly", "Solar this year (kWh)", sensorDomains)}
+            ${this._renderEntityPicker("grid_import_monthly", "Grid imported this month (kWh)", sensorDomains)}
+            ${this._renderEntityPicker("grid_import_yearly", "Grid imported this year (kWh)", sensorDomains)}
+            ${this._renderEntityPicker("grid_export_monthly", "Grid exported this month (kWh)", sensorDomains)}
+            ${this._renderEntityPicker("grid_export_yearly", "Grid exported this year (kWh)", sensorDomains)}
+            ${this._renderEntityPicker("home_monthly", "Home consumption this month (kWh)", sensorDomains)}
+            ${this._renderEntityPicker("home_yearly", "Home consumption this year (kWh)", sensorDomains)}
+          </details>
         </div>
 
         <div class="section">
@@ -566,6 +575,20 @@ class EnergyFlowCardEditor extends LitElement {
         color: var(--secondary-text-color);
       }
       .hint strong { color: var(--primary-text-color); }
+      .advanced {
+        margin-top: 6px;
+        border-top: 1px solid var(--divider-color, rgba(255,255,255,0.1));
+        padding-top: 8px;
+      }
+      .advanced > summary {
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--secondary-text-color);
+        list-style: revert;
+        padding: 4px 0;
+      }
+      .advanced[open] > summary { color: var(--primary-text-color); }
       ha-entity-picker, ha-textfield, ha-select {
         display: block;
         width: 100%;

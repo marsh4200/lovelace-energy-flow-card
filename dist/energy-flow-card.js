@@ -2,6 +2,19 @@
  * Custom Energy Flow Card for Home Assistant
  * v2.1.0 — "Inverex" dark dashboard layout + live weather sky
  *
+ * v2.2.0 — Month/year self-tracking from a single daily sensor, plus a
+ * phone-friendly layout pass. You now only configure the *daily* sensor
+ * for each category; the card builds running month + year totals from it
+ * on its own (no month/year helpers required). The tracker only ever adds
+ * the increase between readings, so totals climb steadily and never jump
+ * down on a midnight reset, HA restart or sensor glitch. Month/year
+ * resets are tied strictly to the calendar. The old per-day "lock at
+ * rollover" accumulator (which could under-count and jump) is gone, and
+ * the storage key is bumped so everyone starts on clean, correct records.
+ * On phones the totals table now stacks each category label above its
+ * Today/Month/Year cells, footer cards go 2-up, and paddings tighten so
+ * nothing overflows on a narrow screen.
+ *
  * v2.1.3 — Fixed the daytime sky rendering black. The sky gradient is
  * blended twice (base time-of-day colour, then toward the cloud/grey
  * target). The first blend returns an "rgb(r,g,b)" string, but the colour
@@ -40,7 +53,7 @@ import {
 
 let _instanceCounter = 0;
 
-const STORAGE_KEY = "energy-flow-card.totals.v1";
+const STORAGE_KEY = "energy-flow-card.totals.v2";
 
 /* ------------------------------------------------------------------ *
  * Resolve the URL the card's own script was loaded from, so we can   *
@@ -226,11 +239,11 @@ try {
 } catch (e) { /* ignore */ }
 
 /* ------------------------------------------------------------------ *
- * Persistent daily-rollup helper (unchanged from v1).                 *
- * Stores per entity_id: lastDate, lastDaily, monthKey, monthTotal,    *
- * yearKey, yearTotal. On day rollover, locks yesterday's final daily  *
- * value into the month + year buckets (resetting them on month/year   *
- * rollover first).                                                    *
+ * Persistent month/year self-tracking store (browser localStorage).   *
+ * Stores per entity_id: lastVal, monthKey, monthTotal, yearKey,       *
+ * yearTotal. Each reading adds only the increase since the last one   *
+ * into the month + year buckets, which reset on calendar month/year   *
+ * change. See _accumulate() below for the full rationale.             *
  * ------------------------------------------------------------------ */
 function _readStore() {
   try {
@@ -310,66 +323,88 @@ function _skyBaseColors(hr) {
   return { t: _SKY_STOPS[0].t, m: _SKY_STOPS[0].m, b: _SKY_STOPS[0].b };
 }
 
+/*
+ * Self-tracking month / year totals from a SINGLE daily sensor.
+ *
+ * You only ever configure the *daily* (today) sensor — the kind that
+ * climbs through the day and resets to 0 at midnight (a utility_meter
+ * `cycle: daily`, or your inverter's built-in "today" sensor). From that
+ * one entity this builds running month + year totals on its own.
+ *
+ * How it stays stable (i.e. "doesn't change / jump"):
+ *   - It watches the daily value and only ever ADDS the *increase*
+ *     between readings (the delta). Totals therefore only ever go up.
+ *   - When the daily sensor drops — midnight reset, an HA restart, a
+ *     brief sensor glitch — that's treated as a fresh start, so the new
+ *     small reading is added on top rather than wiping anything out.
+ *   - Month total resets only when the calendar month changes; year
+ *     total only when the year changes. Nothing else resets it.
+ *
+ * Honest limitation: this runs in the browser, so it can only count
+ * what it sees while the card is open. If you want month/year numbers
+ * that are exact even when no dashboard is open, create HA-side monthly
+ * /yearly utility_meter sensors and point the optional override fields
+ * at them — but for most people the daily sensor alone is plenty.
+ */
 function _accumulate(entityId, v) {
   if (!entityId) return { today: null, month: null, year: null };
 
+  const cur = isFinite(v) ? Math.max(0, v) : null;
   const store = _readStore();
   const rec = store[entityId] || {};
   const k = _todayKeys();
 
-  if (!rec.lastDate) {
-    rec.lastDate = k.date;
-    rec.lastDaily = isFinite(v) ? v : 0;
+  // First time we've ever seen this entity: seed the buckets with
+  // today's reading so the current day already counts.
+  if (rec.lastVal === undefined || rec.monthKey === undefined) {
+    const seed = cur != null ? cur : 0;
+    rec.lastVal = seed;
     rec.monthKey = k.month;
-    rec.monthTotal = 0;
     rec.yearKey = k.year;
-    rec.yearTotal = 0;
+    rec.monthTotal = seed;
+    rec.yearTotal = seed;
     store[entityId] = rec;
     _writeStore(store);
-    return {
-      today: isFinite(v) ? v : 0,
-      month: isFinite(v) ? v : 0,
-      year: isFinite(v) ? v : 0,
-    };
+    return { today: seed, month: seed, year: seed };
   }
 
-  if (rec.lastDate === k.date) {
-    if (isFinite(v)) {
-      rec.lastDaily = v;
-      store[entityId] = rec;
-      _writeStore(store);
-    }
-    return {
-      today: isFinite(v) ? v : rec.lastDaily,
-      month: (rec.monthTotal || 0) + (isFinite(v) ? v : rec.lastDaily),
-      year: (rec.yearTotal || 0) + (isFinite(v) ? v : rec.lastDaily),
-    };
-  }
-
-  // Day rolled.
-  const closing = isFinite(rec.lastDaily) ? rec.lastDaily : 0;
-
-  if (rec.yearKey !== k.year) {
-    rec.yearKey = k.year;
-    rec.yearTotal = 0;
-  }
+  // Roll the buckets over on a new month / year before adding anything.
   if (rec.monthKey !== k.month) {
     rec.monthKey = k.month;
     rec.monthTotal = 0;
   }
-  rec.monthTotal = (rec.monthTotal || 0) + closing;
-  rec.yearTotal = (rec.yearTotal || 0) + closing;
+  if (rec.yearKey !== k.year) {
+    rec.yearKey = k.year;
+    rec.yearTotal = 0;
+  }
 
-  rec.lastDate = k.date;
-  rec.lastDaily = isFinite(v) ? v : 0;
+  // If we couldn't read a number this tick, just report what we have.
+  if (cur == null) {
+    store[entityId] = rec;
+    _writeStore(store);
+    return {
+      today: isFinite(rec.lastVal) ? rec.lastVal : 0,
+      month: rec.monthTotal || 0,
+      year: rec.yearTotal || 0,
+    };
+  }
+
+  // Count only the increase. A drop = reset (midnight / restart / glitch),
+  // so the fresh reading itself is the amount to add.
+  const prev = isFinite(rec.lastVal) ? rec.lastVal : 0;
+  const delta = cur >= prev ? cur - prev : cur;
+
+  rec.monthTotal = (rec.monthTotal || 0) + delta;
+  rec.yearTotal = (rec.yearTotal || 0) + delta;
+  rec.lastVal = cur;
 
   store[entityId] = rec;
   _writeStore(store);
 
   return {
-    today: rec.lastDaily,
-    month: rec.monthTotal + rec.lastDaily,
-    year: rec.yearTotal + rec.lastDaily,
+    today: cur,
+    month: rec.monthTotal,
+    year: rec.yearTotal,
   };
 }
 
@@ -511,14 +546,14 @@ class EnergyFlowCard extends LitElement {
 
   /* Resolve today / month / year totals for one category.
    *
-   * IMPORTANT (cross-device correctness): if the user has configured the
-   * real monthly / yearly utility_meter sensors, we read them DIRECTLY.
-   * Those live in Home Assistant's backend, so every device (phone,
-   * tablet, laptop) sees identical values. We only fall back to the old
-   * per-browser localStorage accumulator for whichever of month / year
-   * is NOT configured -- that fallback is inherently device-local and
-   * will differ between browsers, which is exactly the bug we're
-   * avoiding when the proper sensors exist.
+   * Primary path: you configure ONLY the daily sensor. The card then
+   * self-tracks month and year from it (see _accumulate). You don't need
+   * to create or configure any month/year entities.
+   *
+   * Optional override: if you HAVE got HA-side monthly / yearly
+   * utility_meter sensors and pass them in, we read those directly so
+   * every device shows identical numbers. Any override you leave blank
+   * falls back to the daily self-tracker for that piece.
    */
   _resolveTotals(dailyEntityId, monthlyEntityId, yearlyEntityId) {
     const today = dailyEntityId ? this._toKWh(dailyEntityId) : null;
@@ -1972,10 +2007,50 @@ class EnergyFlowCard extends LitElement {
 
       /* ---------- Mobile ---------- */
       @media (max-width: 480px) {
-        .stats-grid { grid-template-columns: repeat(3, 1fr); }
-        .footer-cards { grid-template-columns: repeat(2, 1fr); }
+        .card-content { padding: 12px 12px 14px; }
+
+        .header { padding-bottom: 8px; }
+        .header-title { font-size: 12px; letter-spacing: 0.08em; }
+        .header-badge { font-size: 10px; padding: 2px 8px; }
+
+        .scene { margin: 0 -4px; }
+
+        .bars { gap: 10px 12px; margin: 6px 0 12px; padding: 0; }
+        .bar-label { font-size: 11px; min-width: 24px; }
+
+        .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+        .stat-cell { padding: 10px; }
+        .stat-label { font-size: 10px; }
+        .stat-value { font-size: 15px; white-space: normal; }
+
+        .footer-cards { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+        .footer-card { padding: 10px 6px; }
+        .footer-card-icon { font-size: 20px; }
         .footer-card-value { font-size: 16px; }
-        .stat-value { font-size: 16px; }
+
+        /* Totals: stack the category label above its three cells so the
+           kWh numbers always have room and never overflow. */
+        .totals-row {
+          grid-template-columns: repeat(3, 1fr);
+          gap: 5px;
+          row-gap: 4px;
+        }
+        .totals-label-cell {
+          grid-column: 1 / -1;
+          font-size: 12px;
+          margin-bottom: 1px;
+        }
+        .cell { padding: 4px 6px; }
+        .cell-label { font-size: 8px; }
+        .cell-value { font-size: 13px; }
+        .cell-unit { font-size: 9px; }
+      }
+
+      /* ---------- Very narrow phones ---------- */
+      @media (max-width: 360px) {
+        .card-content { padding: 10px 10px 12px; }
+        .footer-card-value { font-size: 15px; }
+        .stat-value { font-size: 14px; }
       }
     `;
   }
@@ -1992,7 +2067,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c ENERGY-FLOW-CARD %c v2.1.3 ",
+  "%c ENERGY-FLOW-CARD %c v2.2.0 ",
   "color: white; background: #EF9F27; font-weight: 700;",
   "color: white; background: #1FA8E0; font-weight: 700;"
 );
